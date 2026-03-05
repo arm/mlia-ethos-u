@@ -1,0 +1,105 @@
+# SPDX-FileCopyrightText: Copyright 2022-2026, Arm Limited and/or its affiliates.
+# SPDX-License-Identifier: Apache-2.0
+# Pre-commit checks
+#
+# General policy:
+
+# - tools that *fix* issues are preferred to tools that only *gripe*
+#   about issues, both can coexist, but when the conflict we
+#   selectivly reconfigure the griper not the fixer.
+#
+
+repos:
+- repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: v4.4.0
+  hooks:
+    - id: check-yaml
+
+    - id: check-toml
+
+    - id: end-of-file-fixer
+
+    - id: mixed-line-ending
+      args: ['--fix=lf']
+      description: Forces to replace line ending by the UNIX 'lf' character.
+
+    - id: detect-private-key
+
+    - id: check-executables-have-shebangs
+
+    - id: check-added-large-files
+      args: ['--maxkb=300', "--enforce-all"]
+      exclude: src/mlia/resources
+
+- repo: https://github.com/asottile/pyupgrade
+  rev: v3.10.1
+  hooks:
+    - id: pyupgrade
+      args: ["--py38-plus"]
+
+- repo: https://github.com/PyCQA/pydocstyle
+  rev: 6.3.0
+  hooks:
+    - id: pydocstyle
+      additional_dependencies: ["tomli"]
+
+- repo: https://github.com/jackdewinter/pymarkdown
+  rev: v0.9.35
+  hooks:
+    - id: pymarkdown
+      args: ["-d", "MD041,MD025,MD024,MD002,MD013", "scan"]
+
+- repo: https://github.com/ryanrhee/shellcheck-py
+  rev: v0.9.0.5
+  hooks:
+    - id: shellcheck
+      args: [-f, gcc, -x]
+
+- repo: https://github.com/fsfe/reuse-tool
+  rev: v2.1.0
+  hooks:
+    - id: reuse
+
+- repo: https://github.com/PrincetonUniversity/blocklint
+  rev: v0.2.4
+  hooks:
+    - id: blocklint
+      exclude: setup.cfg
+
+- repo: https://github.com/macisamuele/language-formatters-pre-commit-hooks
+  rev: v2.16.0
+  hooks:
+  - id: pretty-format-toml
+    args: [--autofix, "--no-sort", --indent, "4"]
+
+- repo: local
+  hooks:
+    - id: mypy
+      name: mypy
+      entry: mypy
+      language: python
+      types: [python]
+      require_serial: true
+      additional_dependencies: []
+
+- repo: https://github.com/astral-sh/ruff-pre-commit
+  rev: v0.15.0
+  hooks:
+    - id: ruff-check
+      args: [ --fix ]
+    - id: ruff-format
+
+- repo: https://github.com/commitizen-tools/commitizen
+  rev: v3.13.0
+  hooks:
+    - id: commitizen-branch
+      args: [--rev-range, HEAD~1..HEAD]
+
+- repo: local
+  hooks:
+    - id: check-copyright-header
+      name: Check Copyright header years
+      entry: python pre_commit_hooks/check_copyright_header.py
+      language: python
+      verbose: true
+      exclude: '\.license$'
