@@ -13,3 +13,4 @@ mlia-output
 report
 .ipynb_checkpoints
 .tox
+uv.lock
