@@ -43,9 +43,6 @@ build-backend = "hatchling.build"
 [tool.hatch.version]
 source = "uv-dynamic-versioning"
 
-[tool.hatch.build]
-include = ["src/mlia/resources/**"]
-
 [tool.hatch.build.targets.wheel]
 packages = ["src/mlia"]
 
