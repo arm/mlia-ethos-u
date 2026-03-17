@@ -31,7 +31,7 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - run: uv build
-      - run: uv sync --no-sources --no-install-project --group test
+      - run: uv sync --no-sources --no-install-project --only-group test
       - run: |
           set -o pipefail
           uv run --no-sync \
