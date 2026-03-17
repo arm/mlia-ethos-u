@@ -18,7 +18,7 @@ import mlia
 import mlia.core.output_schema as schema
 from mlia.backend.errors import BackendExecutionFailed
 from mlia.backend.repo import get_backend_repository
-from mlia.utils.filesystem import get_mlia_resources, sha256
+from mlia.utils.filesystem import get_mlia_resource_dirs, get_mlia_resources, sha256
 from mlia.utils.proc import Command, OutputLogger, process_command_output
 
 logger = logging.getLogger(__name__)
@@ -376,8 +376,6 @@ class FVPMetadata:
 
 def get_generic_inference_app_path(fvp: str, target: str) -> Path:
     """Return path to the generic inference runner binary."""
-    apps_path = get_mlia_resources() / "backends/applications"
-
     fvp_mapping = {"corstone-300": "300", "corstone-310": "310", "corstone-320": "320"}
     target_mapping = {"ethos-u55": "U55", "ethos-u65": "U65", "ethos-u85": "U85"}
 
@@ -385,7 +383,19 @@ def get_generic_inference_app_path(fvp: str, target: str) -> Path:
     app_version = f"22.08.02-ethos-{target_mapping[target]}-Default-noTA"
 
     app_dir = f"inference_runner-{fvp_version}-{app_version}"
-    return apps_path.joinpath(app_dir, "ethos-u-inference_runner.axf")
+    relative_app_path = Path(
+        "backends",
+        "applications",
+        app_dir,
+        "ethos-u-inference_runner.axf",
+    )
+
+    for resources_dir in get_mlia_resource_dirs():
+        candidate = resources_dir / relative_app_path
+        if candidate.is_file():
+            return candidate
+
+    return get_mlia_resources() / relative_app_path
 
 
 def get_executable_name(fvp: str, profile: str, target: str) -> str:

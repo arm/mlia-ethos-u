@@ -21,6 +21,7 @@ from mlia.backend.corstone.performance import (
     GenericInferenceOutputParser,
     build_corstone_command,
     estimate_performance,
+    get_generic_inference_app_path,
     get_metrics,
 )
 from mlia.backend.errors import BackendExecutionFailed
@@ -215,6 +216,9 @@ def test_build_corsone_command(
 ) -> None:
     """Test function build_corstone_command."""
     monkeypatch.setattr(
+        "mlia.backend.corstone.performance.get_mlia_resource_dirs", lambda: []
+    )
+    monkeypatch.setattr(
         "mlia.backend.corstone.performance.get_mlia_resources", lambda: Path("apps")
     )
 
@@ -230,6 +234,34 @@ def test_build_corsone_command(
         )
     )
     assert command == case.expected_command
+
+
+def test_get_generic_inference_app_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test generic inference app lookup across configured MLIA resource dirs."""
+    first_resources_dir = tmp_path / "resources-first"
+    second_resources_dir = tmp_path / "resources-second"
+    app_path = (
+        second_resources_dir
+        / "backends"
+        / "applications"
+        / "inference_runner-sse-300-22.08.02-ethos-U55-Default-noTA"
+        / "ethos-u-inference_runner.axf"
+    )
+    app_path.parent.mkdir(parents=True)
+    app_path.write_text("fake axf", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "mlia.backend.corstone.performance.get_mlia_resource_dirs",
+        lambda: [first_resources_dir, second_resources_dir],
+    )
+    monkeypatch.setattr(
+        "mlia.backend.corstone.performance.get_mlia_resources",
+        lambda: tmp_path / "fallback",
+    )
+
+    assert get_generic_inference_app_path("corstone-300", "ethos-u55") == app_path
 
 
 def test_get_metrics_wrong_fvp(tmp_path: Path) -> None:
