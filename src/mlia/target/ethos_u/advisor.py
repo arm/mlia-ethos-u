@@ -32,7 +32,10 @@ from mlia.target.ethos_u.legacy_shims import (
     LEGACY_OPTIMIZATION_AVAILABLE,
     add_common_optimization_params,
 )
-from mlia.target.ethos_u.pattern_analysis import ActivationFunctionPatternAnalyzer
+from mlia.target.ethos_u.pattern_analysis import (
+    ActivationFunctionPatternAnalyzer,
+    LayerHotSpotPatternAnalyzer,
+)
 from mlia.target.registry import profile
 from mlia.utils.types import is_list_of
 
@@ -129,9 +132,7 @@ class EthosUInferenceAdvisor(DefaultInferenceAdvisor):
 
     def get_pattern_analyzers(self, context: Context) -> list[PatternAnalyzer]:
         """Return list of the pattern analyzers."""
-        return [
-            ActivationFunctionPatternAnalyzer(),
-        ]
+        return [ActivationFunctionPatternAnalyzer(), LayerHotSpotPatternAnalyzer()]
 
     def get_producers(self, context: Context) -> list[AdviceProducer]:
         """Return list of the advice producers."""

@@ -290,6 +290,7 @@ class VelaCompiler:  # pylint: disable=too-many-instance-attributes
                     model_path.as_posix(),
                     "--config",
                     str(self.config_file),
+                    "--debug-force-regor",
                 ]
                 if self.verbose_performance:
                     main_args.append("--verbose-performance")

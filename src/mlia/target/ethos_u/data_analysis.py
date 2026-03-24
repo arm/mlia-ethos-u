@@ -14,12 +14,18 @@ from mlia.core.data_analysis import (
     Fact,
     FactExtractor,
     LayerCompatibilityIssue,
+    LayerPerformanceIssue,
     register_fact_type,
 )
 from mlia.target.ethos_u.common_reporters import analyze_tflite_compatibility_common
 from mlia.target.ethos_u.optimization_shims import OptimizationSettings
 from mlia.target.ethos_u.tflite_shims import TFLiteCompatibilityInfo
-from mlia.target.ethos_u.performance import OptimizationPerformanceMetrics
+from mlia.target.ethos_u.performance import (
+    CombinedPerformanceResult,
+    CorstonePerformanceResult,
+    VelaPerformanceResult,
+    OptimizationPerformanceMetrics,
+)
 
 
 @dataclass
@@ -78,6 +84,50 @@ class EthosULayerSuboptimalActivation(LayerCompatibilityIssue):
         result = super().to_dict()
         result["activation_type"] = self.activation_type
         return result
+
+
+@register_fact_type(
+    "ethos_u_layer_high_network_share",
+    "layer",
+    "Layer has a high number of op cycles compared to others",
+)
+@dataclass
+class EthosULayerHighNetworkShare(LayerPerformanceIssue):
+    """Fact indicating a layer has high network share."""
+
+
+@register_fact_type(
+    "ethos_u_layer_high_op_cycles",
+    "layer",
+    "Layer has a high number of op cycles",
+)
+@dataclass
+class EthosULayerHighOpCycles(LayerPerformanceIssue):
+    """Fact indicating a layer has high op cycles."""
+
+
+@register_fact_type(
+    "ethos_u_layer_high_memory_pressure",
+    "layer",
+    "Layer op cycles dominated by memory access cycles",
+)
+@dataclass
+class EthosULayerHighMemoryPressure(LayerPerformanceIssue):
+    """Fact indicating memory access dominates layer execution time."""
+
+    mem_to_npu_ratio: float
+
+
+@register_fact_type(
+    "ethos_u_layer_low_mac_util",
+    "layer",
+    "Layer has lower mac util than expected",
+)
+@dataclass
+class EthosULayerLowMacUtil(LayerPerformanceIssue):
+    """Fact indicating mac util is lower than expected for that op."""
+
+    severity: str
 
 
 @dataclass
@@ -156,7 +206,7 @@ class EthosUDataAnalyzer(FactExtractor):
 
     @singledispatchmethod
     def analyze_data(self, data_item: DataItem) -> None:  # type: ignore
-        """Analyse the data."""
+        """Analyze the data."""
         print(
             f"DEBUG: Unhandled data_item type: {type(data_item)} - "
             f"{data_item.__class__.__module__}.{data_item.__class__.__name__}"
@@ -164,7 +214,7 @@ class EthosUDataAnalyzer(FactExtractor):
 
     @analyze_data.register
     def analyze_vela_compatibility(self, vela_result: VelaCompatibilityResult) -> None:
-        """Analyse Vela compatibility result and extract operator information."""
+        """Analyze Vela compatibility result and extract operator information."""
         # Extract the Operators object from VelaCompatibilityResult
         self.analyze_operator_compatibility(vela_result.legacy_info)
         # Analyze activation usage patterns
@@ -295,3 +345,224 @@ class EthosUDataAnalyzer(FactExtractor):
     def analyze_tflite_compatibility(self, data_item: TFLiteCompatibilityInfo) -> None:
         """Analyze TensorFlow Lite compatibility information."""
         analyze_tflite_compatibility_common(self, data_item)
+
+    @analyze_data.register
+    def analyze_combined_performance_result(
+        self, data_item: CombinedPerformanceResult
+    ) -> None:
+        """Analyze combined performance results."""
+        standard_out = getattr(data_item, "standardized_output", None)
+        if not standard_out or not isinstance(standard_out, dict):
+            print(
+                f"DEBUG: No standardized output for: {type(data_item)} - "
+                f"{data_item.__class__.__module__}.{data_item.__class__.__name__}"
+            )
+            return
+        corstone_result = 1
+        breakdowns = standard_out["results"][corstone_result]["breakdowns"]
+        self.analyze_network_share(breakdowns)
+        self.analyze_memory_pressure(breakdowns)
+        self.analyze_mac_util(breakdowns)
+
+    @analyze_data.register
+    def analyze_corstone_performance_result(
+        self, data_item: CorstonePerformanceResult
+    ) -> None:
+        """Analyze Corstone-only performance results."""
+        standard_out = getattr(data_item, "standardized_output", None)
+        if not standard_out or not isinstance(standard_out, dict):
+            print(
+                f"DEBUG: No standardized output for: {type(data_item)} - "
+                f"{data_item.__class__.__module__}.{data_item.__class__.__name__}"
+            )
+            return
+        corstone_result = 0
+        breakdowns = standard_out["results"][corstone_result]["breakdowns"]
+        self.analyze_network_share(breakdowns)
+        self.analyze_memory_pressure(breakdowns)
+        self.analyze_mac_util(breakdowns)
+
+    @analyze_data.register
+    def analyze_vela_performance_result(self, data_item: VelaPerformanceResult) -> None:
+        """Analyze combined performance results."""
+        standard_out = getattr(data_item, "standardized_output", None)
+        if not standard_out or not isinstance(standard_out, dict):
+            print(
+                f"DEBUG: No standardized output for: {type(data_item)} - "
+                f"{data_item.__class__.__module__}.{data_item.__class__.__name__}"
+            )
+            return
+        vela_result = 0
+        breakdowns = standard_out["results"][vela_result]["breakdowns"]
+        self.analyze_op_cycles(breakdowns)
+        self.analyze_memory_pressure(breakdowns)
+        self.analyze_mac_util(breakdowns)
+
+    def get_metric_tup(
+        self, layer: dict, metric_names: list[str]
+    ) -> tuple[str, float, str] | None:
+        """Return the first matching metric as (name, float(value), unit)."""
+        metrics = layer["metrics"]
+        for metric in metrics:
+            name = metric["name"]
+            if name in metric_names:
+                try:
+                    return (metric["name"], float(metric["value"]), metric["unit"])
+                except (TypeError, ValueError):
+                    return None
+        return None
+
+    METRIC_ALIASES = {
+        "op_cycles": ["op_cycles"],
+        "npu_cycles": ["npu_cycles", "npu"],
+        "sram_cycles": ["sram_access_cycles", "sram_ac"],
+        "dram_cycles": ["dram_access_cycles", "dram_ac"],
+        "on_flash_cycles": ["on_chip_flash_access_cycles", "onflash_ac"],
+        "off_flash_cycles": ["off_chip_flash_access_cycles", "offflash_ac"],
+        "mac_count": ["mac_count"],
+        "mac_util": ["util_mac_percentage", "util_mac"],
+        "sram_usage": ["sram_usage", "staging_usage"],
+    }
+    RELATIVE_FLOOR = 0.10
+    MAX_ITEMS = 10
+
+    def analyze_network_share(self, breakdowns: list) -> None:
+        """Detect layers with largest network share."""
+        relative_floor = self.RELATIVE_FLOOR
+        max_items = self.MAX_ITEMS
+
+        # Collect (network_share_pct, layer) pairs for easy sorting
+        layers_scored = []
+        for layer in breakdowns:
+            try:
+                network_metric = 3
+                network_pct = float(layer["metrics"][network_metric]["value"])
+                layers_scored.append((network_pct, layer))
+            except (KeyError, IndexError, TypeError, ValueError):
+                continue
+
+        if not layers_scored:
+            return
+
+        value = 0
+        layers_scored.sort(key=lambda x: x[value], reverse=True)
+
+        # Determine threshold relative to highest share
+        highest_op = 0
+        max_pct = layers_scored[highest_op][value]
+        threshold = max_pct * relative_floor
+
+        selected = [(pct, layer) for pct, layer in layers_scored if pct >= threshold]
+        selected = selected[:max_items]
+
+        for pct, layer in selected:
+            layer_fact = EthosULayerHighNetworkShare(
+                operator_name=layer["name"],
+                location=layer["location"],
+                metric="network_share",
+                metric_value=pct,
+                metric_unit="%",
+            )
+            self.add_fact(layer_fact)
+
+    def analyze_op_cycles(self, breakdowns: list) -> None:
+        """Detect the top 10 layers with the highest op cycles."""
+        max_items = self.MAX_ITEMS
+
+        layers_scored = []
+        for layer in breakdowns:
+            metric = self.get_metric_tup(layer, self.METRIC_ALIASES["op_cycles"])
+            if metric is None:
+                continue
+
+            metric_name, op_cycles, metric_unit = metric
+            layers_scored.append((op_cycles, metric_name, metric_unit, layer))
+
+        if not layers_scored:
+            return
+
+        # sort by op_cycles, high to low
+        value = 0
+        layers_scored.sort(key=lambda item: item[value], reverse=True)
+
+        # only emit fact for the the top MAX_ITEMS
+        for op_cycles, metric_name, metric_unit, layer in layers_scored[:max_items]:
+            layer_fact = EthosULayerHighOpCycles(
+                operator_name=layer["name"],
+                location=layer["location"],
+                metric=metric_name,
+                metric_value=op_cycles,
+                metric_unit=metric_unit,
+            )
+            self.add_fact(layer_fact)
+
+    def analyze_memory_pressure(self, breakdowns: list) -> None:
+        """Detect if op cycles is memory dominated."""
+        for layer in breakdowns:
+            try:
+                npu_metric = self.get_metric_tup(
+                    layer, self.METRIC_ALIASES["npu_cycles"]
+                )
+                if npu_metric is None:
+                    continue
+
+                npu_cycles = npu_metric[1]
+                # get sram_ac, dram_ac, onfalsh_ac, offflash_ac
+                candidates = [
+                    self.get_metric_tup(layer, self.METRIC_ALIASES["sram_cycles"]),
+                    self.get_metric_tup(layer, self.METRIC_ALIASES["dram_cycles"]),
+                    self.get_metric_tup(layer, self.METRIC_ALIASES["on_flash_cycles"]),
+                    self.get_metric_tup(layer, self.METRIC_ALIASES["off_flash_cycles"]),
+                ]
+                valid_candidates: list[tuple[str, float, str]] = [
+                    candidate for candidate in candidates if candidate is not None
+                ]
+                if not valid_candidates:
+                    continue
+
+                max_name, max_val, max_unit = max(valid_candidates, key=lambda t: t[1])
+
+                if npu_cycles and (max_val / npu_cycles) > 1:
+                    layer_fact = EthosULayerHighMemoryPressure(
+                        operator_name=layer["name"],
+                        location=layer["location"],
+                        metric=max_name,
+                        metric_value=max_val,
+                        metric_unit=max_unit,
+                        mem_to_npu_ratio=max_val / npu_cycles,
+                    )
+                    self.add_fact(layer_fact)
+
+            except (KeyError, IndexError, TypeError, ValueError):
+                continue
+
+    def analyze_mac_util(self, breakdowns: list) -> None:
+        """Detect if mac util is lower then expected."""
+        for layer in breakdowns:
+            mac_util_metric = self.get_metric_tup(
+                layer, self.METRIC_ALIASES["mac_util"]
+            )
+            if mac_util_metric is None:
+                continue
+
+            severity = None
+
+            if layer["name"] == "Conv2D" and mac_util_metric[1] < 30:
+                severity = "very low"
+            elif layer["name"] == "Conv2D" and mac_util_metric[1] < 55:
+                severity = "low"
+            elif layer["name"] == "DepthwiseConv2D" and mac_util_metric[1] < 3:
+                severity = "low"
+
+            metric, value, unit = mac_util_metric
+
+            if severity is not None:
+                layer_fact = EthosULayerLowMacUtil(
+                    operator_name=layer["name"],
+                    location=layer["location"],
+                    metric=metric,
+                    metric_value=value,
+                    metric_unit=unit,
+                    severity=severity,
+                )
+                self.add_fact(layer_fact)

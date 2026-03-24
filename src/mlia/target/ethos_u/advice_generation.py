@@ -28,7 +28,12 @@ from mlia.target.ethos_u.data_analysis import (
     HasUnsupportedOnNPUOperators,
     OptimizationResults,
 )
-from mlia.target.ethos_u.pattern_analysis import IneffectiveActivationPattern
+from mlia.target.ethos_u.pattern_analysis import (
+    HighImpactLayersPattern,
+    IneffectiveActivationPattern,
+    LowMacUtilLayersPattern,
+    MemoryBoundLayersPattern,
+)
 
 
 class EthosUAdviceProducer(FactBasedAdviceProducer):
@@ -233,6 +238,95 @@ class EthosUAdviceProducer(FactBasedAdviceProducer):
             category=SchemaAdviceCategory.PERFORMANCE,
             severity=AdviceSeverity.WARNING,
             affected_entities=affected_entities,
+        )
+
+    @produce_advice.register
+    @advice_category(AdviceCategory.PERFORMANCE)
+    def handle_high_impact_layers(self, data_item: HighImpactLayersPattern) -> None:
+        """Advice for high impact layer patterns."""
+        layer_word = "layer" if data_item.layer_count == 1 else "layers"
+        layer_phrase = "this layer" if data_item.layer_count == 1 else "these layers"
+
+        # rank layers by operator network share
+        ranked_lines = []
+        for i, fact in enumerate(data_item.facts, start=1):
+            ranked_lines.append(
+                f"{i}) {fact.operator_name}"
+                f" - {fact.metric_value} {fact.metric_unit} ({fact.location})"
+            )
+
+        message = (
+            f"The following {data_item.layer_count} {layer_word} make up the majority"
+            f" of operator cycles. "
+            f"Improving {layer_phrase} will have the biggest impact on performance."
+            f"\n{data_item.recommendation}\n" + "\n".join(ranked_lines)
+        )
+
+        self.add_advice(
+            message=message,
+            category=SchemaAdviceCategory.PERFORMANCE,
+            severity=AdviceSeverity.WARNING,
+        )
+
+    @produce_advice.register
+    @advice_category(AdviceCategory.PERFORMANCE)
+    def handle_low_mac_util(self, data_item: LowMacUtilLayersPattern) -> None:
+        """Advice for low mac util patterns."""
+        layer_phrase = "layer has" if data_item.layer_count == 1 else "layers have"
+
+        lines = []
+        for i, fact in enumerate(data_item.facts, start=1):
+            lines.append(
+                f"{i}) {fact.operator_name}"
+                f" - {fact.metric_value:.2f}% "
+                f" - {fact.severity} ({fact.location})"
+            )
+
+        count = len(data_item.facts)
+
+        message = (
+            f"Among the layers with the highest impact, "
+            f"{count} {layer_phrase} been identified with low MAC utilization. "
+            f"Low MAC utilization may be expected for operations with small channel "
+            f"counts or small spatial dimensions. "
+            f"{data_item.recommendation}\n" + "\n".join(lines)
+        )
+
+        self.add_advice(
+            message=message,
+            category=SchemaAdviceCategory.PERFORMANCE,
+            severity=AdviceSeverity.WARNING,
+        )
+
+    @produce_advice.register
+    @advice_category(AdviceCategory.PERFORMANCE)
+    def handle_memory_bound(self, data_item: MemoryBoundLayersPattern) -> None:
+        """Advice for memory bound patterns."""
+        layer_phrase = "layer has" if data_item.layer_count == 1 else "layers have"
+
+        lines = []
+
+        for i, fact in enumerate(data_item.facts, start=1):
+            lines.append(
+                f"{i}) {fact.operator_name}"
+                f" - {fact.metric_value:.0f} {fact.metric_unit} "
+                f" - {fact.metric}/npu cycles = {fact.mem_to_npu_ratio:.2f}"
+                f" ({fact.location})"
+            )
+
+        count = len(data_item.facts)
+
+        message = (
+            f"Among the layers with the highest impact, {count} {layer_phrase} "
+            f"been identified as possibly memory bound. Layers are identified"
+            f" by high memory-{fact.metric_unit}-to-npu-cycle ratio and low mac util."
+            f"{data_item.recommendation}\n" + "\n".join(lines)
+        )
+
+        self.add_advice(
+            message=message,
+            category=SchemaAdviceCategory.PERFORMANCE,
+            severity=AdviceSeverity.WARNING,
         )
 
     @staticmethod
