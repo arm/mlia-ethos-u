@@ -15,10 +15,10 @@ from mlia.core.data_collection import ContextAwareDataCollector
 from mlia.core.performance import P, PerformanceEstimator
 from mlia.target.ethos_u.legacy_shims import OptimizingPerformaceDataCollector
 from mlia.target.ethos_u.tflite_shims import (
-    TFLiteChecker,
+    LegacyChecker,
     TFLiteCompatibilityInfo,
     get_tflite_model,
-    is_tflite_model,
+    is_legacy_model,
 )
 from mlia.target.ethos_u.config import EthosUConfiguration
 from mlia.target.ethos_u.performance import (
@@ -45,10 +45,10 @@ class EthosUOperatorCompatibility(ContextAwareDataCollector):
 
     def collect_data(self) -> VelaCompatibilityResult | TFLiteCompatibilityInfo | None:
         """Collect operator compatibility information."""
-        if not is_tflite_model(self.model):
+        if is_legacy_model(self.model):
             with log_action("Checking TensorFlow Lite compatibility ..."):
-                tflite_checker = TFLiteChecker()
-                tflite_compat = tflite_checker.check_compatibility(self.model)
+                legacy_checker = LegacyChecker()
+                tflite_compat = legacy_checker.check_compatibility(self.model)
 
             if not tflite_compat.compatible:
                 return tflite_compat

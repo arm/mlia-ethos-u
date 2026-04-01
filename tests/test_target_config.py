@@ -98,7 +98,7 @@ def test_target_profile(
     profile = fn_init(target=target)
     assert profile.target == target
 
-    profile = profile_class.load_json_data({"target": super_target})
+    profile = profile_class.load_data({"target": super_target})
     assert profile.target == super_target
 
     profile = fn_init(target="")

@@ -16,14 +16,19 @@ from typing import Any
 
 # Compatibility helpers
 try:  # pragma: no cover - exercised when legacy is installed
-    from mlia.nn.tensorflow.tflite_compat import (  # pylint: disable=import-error
-        TFLiteChecker,
+    from mlia.nn.tensorflow.tflite_compat import (
+        TFLiteChecker as LegacyChecker,
         TFLiteCompatibilityInfo,
         TFLiteCompatibilityStatus,
         TFLiteConversionError,
         TFLiteConversionErrorCode,
     )
-except ModuleNotFoundError:  # pragma: no cover - minimal fallback
+    from mlia.nn.tensorflow.utils import (
+        is_keras_model,
+        is_saved_model,
+    )
+    import tf_keras as keras
+except ModuleNotFoundError:
 
     class TFLiteCompatibilityStatus(Enum):  # type: ignore[no-redef]
         """Minimal compatibility status."""
@@ -40,7 +45,7 @@ except ModuleNotFoundError:  # pragma: no cover - minimal fallback
         NEEDS_CUSTOM_OPS = auto()
 
     @dataclass
-    class TFLiteConversionError:  # type: ignore[no-redef, override]
+    class TFLiteConversionError:  # type: ignore[no-redef]
         """Minimal conversion error info."""
 
         message: str
@@ -49,7 +54,7 @@ except ModuleNotFoundError:  # pragma: no cover - minimal fallback
         location: list[str]
 
     @dataclass
-    class TFLiteCompatibilityInfo:  # type: ignore[no-redef, override]
+    class TFLiteCompatibilityInfo:  # type: ignore[no-redef]
         """Minimal compatibility info stub."""
 
         status: TFLiteCompatibilityStatus
@@ -98,7 +103,7 @@ except ModuleNotFoundError:  # pragma: no cover - minimal fallback
                 if err.code == TFLiteConversionErrorCode.NEEDS_FLEX_OPS
             ]
 
-    class TFLiteChecker:  # type: ignore[no-redef, override]
+    class LegacyChecker:  # type: ignore[no-redef, override]
         """Stub checker that requires legacy TensorFlow helpers."""
 
         def __init__(self, quantized: bool = False) -> None:
@@ -108,9 +113,13 @@ except ModuleNotFoundError:  # pragma: no cover - minimal fallback
         def check_compatibility(self, model: Any) -> TFLiteCompatibilityInfo:
             """Check compatibility or raise when legacy is unavailable."""
             raise RuntimeError(
-                "TensorFlow Lite compatibility checks require the legacy plugin "
-                "(mlia-legacy)."
+                "This requires mlia-legacy which needs to be installed separately."
+                " Please install mlia-legacy or ensure your model is already in compatible format."
             )
+
+
+# Backwards-compatible alias for existing imports.
+TFLiteChecker = LegacyChecker
 
 
 # Model conversion helpers
@@ -136,7 +145,7 @@ except ModuleNotFoundError:  # pragma: no cover - minimal fallback
         model_path = Path(model)
         if model_path.suffix != ".tflite":
             raise RuntimeError(
-                "Non-TFLite inputs require the legacy plugin (mlia-legacy)."
+                "Non-TFLite inputs require specialized converter plugins."
             )
         return TFLiteModel(model_path)
 
@@ -149,3 +158,28 @@ except ModuleNotFoundError:  # pragma: no cover - minimal fallback
     def is_tflite_model(model: str | Path) -> bool:
         """Check if path contains a TensorFlow Lite model."""
         return Path(model).suffix == ".tflite"
+
+
+def is_legacy_model(model: Any) -> bool:
+    """Return True when the input requires legacy TensorFlow helpers."""
+    if isinstance(model, (str, Path)):
+        # Keras .h5/.hdf5 or SavedModel directory.
+        try:
+            return is_keras_model(model) or is_saved_model(model)
+        except NameError:
+            return _is_legacy_model_path(model)
+    try:
+        return isinstance(model, keras.Model)  # type: ignore[name-defined]
+    except NameError:
+        return False
+
+
+def _is_legacy_model_path(model: str | Path) -> bool:
+    """Return True if the path points to a legacy Keras or SavedModel artifact."""
+    model_path = Path(model)
+    if model_path.is_dir():
+        return (
+            model_path.joinpath("keras_metadata.pb").exists()
+            or model_path.joinpath("saved_model.pb").exists()
+        )
+    return model_path.suffix in {".h5", ".hdf5"}
