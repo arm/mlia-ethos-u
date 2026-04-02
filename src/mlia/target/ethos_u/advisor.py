@@ -28,10 +28,11 @@ from mlia.target.ethos_u.data_collection import (
 )
 from mlia.target.ethos_u.events import EthosUAdvisorStartedEvent
 from mlia.target.ethos_u.handlers import EthosUEventHandler
-from mlia.target.ethos_u.legacy_shims import (
+from mlia.target.ethos_u.utils.legacy_shims import (
     LEGACY_OPTIMIZATION_AVAILABLE,
     add_common_optimization_params,
 )
+from mlia.target.ethos_u.utils.model_format import is_tflite_model
 from mlia.target.ethos_u.pattern_analysis import (
     ActivationFunctionPatternAnalyzer,
     LayerHotSpotPatternAnalyzer,
@@ -42,11 +43,6 @@ from mlia.utils.types import is_list_of
 logger = logging.getLogger(__name__)
 
 _OPTIMIZATION_COLLECTOR_NAME = "common_optimizations"
-
-
-def _is_tflite_model(model: str | Path) -> bool:
-    """Check if path contains a TensorFlow Lite model."""
-    return Path(model).suffix == ".tflite"
 
 
 def _get_optimization_collector_name() -> str:
@@ -86,7 +82,7 @@ class EthosUInferenceAdvisor(DefaultInferenceAdvisor):
 
         # Performance and optimization are mutually exclusive.
         # Decide which one to use (taking into account the model format).
-        if _is_tflite_model(model):
+        if is_tflite_model(model):
             # TensorFlow Lite models do not support optimization (only performance)!
             if context.category_enabled(AdviceCategory.OPTIMIZATION):
                 if not LEGACY_OPTIMIZATION_AVAILABLE:

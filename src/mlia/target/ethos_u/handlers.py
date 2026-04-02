@@ -12,7 +12,7 @@ from pathlib import Path
 from mlia.backend.vela.compat import Operators, VelaCompatibilityResult
 from mlia.core.events import AdviceStageFinishedEvent, CollectedDataEvent
 from mlia.core.handlers import WorkflowEventsHandler
-from mlia.target.ethos_u.tflite_shims import TFLiteCompatibilityInfo
+from mlia.target.ethos_u.utils.tflite_shims import TFLiteCompatibilityInfo
 from mlia.target.ethos_u.events import (
     EthosUAdvisorEventHandler,
     EthosUAdvisorStartedEvent,

@@ -11,7 +11,7 @@ import pytest
 from mlia.backend.vela.compat import NpuSupported, Operator
 from mlia.backend.vela.performance import LayerPerfInfo, LayerwisePerfInfo
 from mlia.core.reporting import CompoundReport, Report, Table
-from mlia.target.ethos_u.tflite_shims import (
+from mlia.target.ethos_u.utils.tflite_shims import (
     TFLiteCompatibilityInfo,
     TFLiteCompatibilityStatus,
 )

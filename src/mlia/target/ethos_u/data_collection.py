@@ -12,9 +12,10 @@ from typing import Any, cast
 from mlia.backend.corstone import is_corstone_backend
 from mlia.backend.vela.compat import VelaCompatibilityResult, supported_operators
 from mlia.core.data_collection import ContextAwareDataCollector
+from mlia.core.errors import ConfigurationError
 from mlia.core.performance import P, PerformanceEstimator
-from mlia.target.ethos_u.legacy_shims import OptimizingPerformaceDataCollector
-from mlia.target.ethos_u.tflite_shims import (
+from mlia.target.ethos_u.utils.legacy_shims import OptimizingPerformaceDataCollector
+from mlia.target.ethos_u.utils.tflite_shims import (
     LegacyChecker,
     TFLiteCompatibilityInfo,
     get_tflite_model,
@@ -29,6 +30,11 @@ from mlia.target.ethos_u.performance import (
     PerformanceMetrics,
     VelaPerformanceResult,
     merge_performance_outputs,
+)
+from mlia.target.ethos_u.utils.model_format import (
+    is_pytorch_file,
+    is_tflite_model,
+    is_tosa_file,
 )
 from mlia.utils.logging import log_action
 
@@ -45,19 +51,23 @@ class EthosUOperatorCompatibility(ContextAwareDataCollector):
 
     def collect_data(self) -> VelaCompatibilityResult | TFLiteCompatibilityInfo | None:
         """Collect operator compatibility information."""
-        if is_legacy_model(self.model):
-            with log_action("Checking TensorFlow Lite compatibility ..."):
-                legacy_checker = LegacyChecker()
-                tflite_compat = legacy_checker.check_compatibility(self.model)
+        if is_pytorch_file(self.model) or is_tosa_file(self.model):
+            model_path = self.model
+        else:
+            if is_legacy_model(self.model):
+                with log_action("Checking TensorFlow Lite compatibility ..."):
+                    legacy_checker = LegacyChecker()
+                    tflite_compat = legacy_checker.check_compatibility(self.model)
 
-            if not tflite_compat.compatible:
-                return tflite_compat
+                    if not tflite_compat.compatible:
+                        return tflite_compat
 
-        tflite_model = get_tflite_model(self.model, self.context)
+            tflite_model = get_tflite_model(self.model, self.context)
+            model_path = Path(tflite_model.model_path)
 
         with log_action("Checking operator compatibility ..."):
             operators = supported_operators(
-                Path(tflite_model.model_path), self.target_config.compiler_options
+                model_path, self.target_config.compiler_options
             )
 
         # Generate standardized output
@@ -76,7 +86,7 @@ class EthosUOperatorCompatibility(ContextAwareDataCollector):
         cli_args = [Path(sys.argv[0]).name] + sys.argv[1:] if sys.argv else []
 
         standardized_output = operators.to_standardized_output(
-            model_path=Path(tflite_model.model_path),
+            model_path=model_path,
             target_config=target_config,
             backend_config=backend_config,
             cli_arguments=cli_args,
@@ -121,7 +131,7 @@ class EthosUPerformance(ContextAwareDataCollector):
         self.target_config = target_config
         self.backends = backends
 
-    def collect_data(
+    def collect_data(  # pylint: disable=too-many-branches
         self,
     ) -> (
         PerformanceMetrics
@@ -130,14 +140,39 @@ class EthosUPerformance(ContextAwareDataCollector):
         | CombinedPerformanceResult
     ):
         """Collect model performance metrics."""
-        tflite_model = get_tflite_model(self.model, self.context)
+        if not any(
+            [
+                is_tflite_model(self.model),
+                is_tosa_file(self.model),
+                is_pytorch_file(self.model),
+            ]
+        ):
+            raise ConfigurationError(
+                "Input must be a TFLite, TOSA or PyTorch .pt2 file."
+            )
+
+        model_to_estimate: Path | Any
+        if is_pytorch_file(self.model):
+            if self.backends is None:
+                self.backends = ["vela"]
+            elif any(backend != "vela" for backend in self.backends):
+                raise ConfigurationError(
+                    "PyTorch .pt2 performance is only supported with the Vela backend."
+                )
+            model_to_estimate = self.model
+        elif is_tosa_file(self.model):
+            model_to_estimate = self.model
+        else:
+            tflite_model = get_tflite_model(self.model, self.context)
+            model_to_estimate = tflite_model
+
         estimator = EthosUPerformanceEstimator(
             self.context,  # type: ignore[arg-type]
             self.target_config,
             self.backends,
         )
 
-        perf = estimator.estimate(tflite_model)
+        perf = estimator.estimate(model_to_estimate)
 
         vela_output = None
         corstone_output = None

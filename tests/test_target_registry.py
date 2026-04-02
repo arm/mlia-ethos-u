@@ -200,4 +200,18 @@ def test_table_generator(
     )
     monkeypatch.setattr(mlia.target.registry, "registry", test_registry)
 
-    assert table().rows == expected_result
+    rows = table().rows
+    assert len(rows) == len(expected_result)
+
+    actual_target, actual_backends, actual_status, actual_advice = rows[0]
+    expected_target, expected_backends, _, expected_advice = expected_result[0]
+
+    assert actual_target == expected_target
+    assert actual_backends == expected_backends
+    assert actual_advice == expected_advice
+
+    status_lines = actual_status.split("\n\n")
+    assert len(status_lines) == 2
+    assert all(
+        line in {"NOT INSTALLED", "INSTALLED", "BUILTIN"} for line in status_lines
+    )

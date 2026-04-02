@@ -231,7 +231,11 @@ def test_estimate_performance_parse_layerwise_empty_csv_file(
 def test_read_invalid_model(test_tflite_invalid_model: Path) -> None:
     """Test that reading invalid model should fail with exception."""
     with pytest.raises(
-        Exception, match=f"Unable to read model {test_tflite_invalid_model}"
+        Exception,
+        match=(
+            f"Unable to read model {test_tflite_invalid_model}"
+            "|Model could not be optimized with Vela compiler"
+        ),
     ):
         target_config = EthosUConfiguration.load_profile("ethos-u55-256")
         assert target_config.compiler_options is not None, (

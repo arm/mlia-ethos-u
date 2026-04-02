@@ -18,7 +18,7 @@ from mlia.target.ethos_u.common_reporters import (
     ModelIsNotTFLiteCompatible,
     TFLiteCompatibilityCheckFailed,
 )
-from mlia.target.ethos_u.tflite_shims import (
+from mlia.target.ethos_u.utils.tflite_shims import (
     TFLiteCompatibilityInfo,
     TFLiteCompatibilityStatus,
     TFLiteConversionError,

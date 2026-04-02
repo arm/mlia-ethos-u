@@ -10,7 +10,7 @@ from mlia.core.data_analysis import Fact
 from mlia.core.output_schema import AdviceCategory as SchemaAdviceCategory
 from mlia.core.output_schema import AdviceSeverity
 from mlia.core.reporting import Column, Format, Report, Table
-from mlia.target.ethos_u.tflite_shims import TFLiteCompatibilityInfo
+from mlia.target.ethos_u.utils.tflite_shims import TFLiteCompatibilityInfo
 
 
 @dataclass

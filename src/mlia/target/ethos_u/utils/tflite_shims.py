@@ -150,16 +150,6 @@ except ModuleNotFoundError:  # pragma: no cover - minimal fallback
         return TFLiteModel(model_path)
 
 
-# Simple format check
-try:  # pragma: no cover - exercised when legacy is installed
-    from mlia.nn.tensorflow.utils import is_tflite_model  # pylint: disable=import-error
-except ModuleNotFoundError:  # pragma: no cover - minimal fallback
-
-    def is_tflite_model(model: str | Path) -> bool:
-        """Check if path contains a TensorFlow Lite model."""
-        return Path(model).suffix == ".tflite"
-
-
 def is_legacy_model(model: Any) -> bool:
     """Return True when the input requires legacy TensorFlow helpers."""
     if isinstance(model, (str, Path)):

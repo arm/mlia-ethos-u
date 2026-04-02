@@ -14,6 +14,10 @@ from pathlib import Path
 from typing import Any, Literal
 
 from mlia.backend.errors import BackendUnavailableError
+from mlia.core.errors import ConfigurationError
+from mlia.plugins.converter_registry import ConverterRegistry
+from mlia.plugins.plugins import load_converter_plugins
+from mlia.target.ethos_u.utils.model_format import is_pytorch_file
 from mlia.utils.filesystem import get_vela_config
 from mlia.utils.logging import redirect_output, redirect_raw_output
 
@@ -50,6 +54,26 @@ except ImportError:
     _VELA_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
+
+# File extensions that Vela natively supports
+_VELA_SUPPORTED_FILE_EXTENSIONS = [".tflite", ".tosa"]
+
+# TOSA format file extensions (TOSA outputs to raw .npz format after compilation)
+_TOSA_FILE_FORMAT_EXTENSIONS = [".tosa", ".tosamlir"]
+
+
+def _get_converter(name: str):
+    registry = ConverterRegistry()
+    load_converter_plugins(registry)
+    converter = registry.get(name)
+    if converter is None:
+        if name == "pt2_to_tosa":
+            raise ConfigurationError(
+                "PyTorch conversion requires the 'mlia-converters-pytorch' plugin "
+                "to be installed."
+            )
+        raise ConfigurationError(f"Converter '{name}' is not available.")
+    return converter
 
 
 @dataclass
@@ -252,17 +276,100 @@ class VelaCompiler:  # pylint: disable=too-many-instance-attributes
 
         sys.setrecursionlimit(self.recursion_limit)
 
+    def _empty_summary(self) -> VelaSummary:
+        """Build a fallback summary when Vela summary CSV is unavailable."""
+        return VelaSummary(
+            cycles_total=0.0,
+            cycles_npu=0.0,
+            cycles_sram_access=0.0,
+            cycles_dram_access=0.0,
+            cycles_on_chip_flash_access=0.0,
+            cycles_off_chip_flash_access=0.0,
+            core_clock=0.0,
+            dram_memory_used=0.0,
+            sram_memory_used=0.0,
+            on_chip_flash_memory_used=0.0,
+            off_chip_flash_memory_used=0.0,
+            batch_size=1,
+            memory_mode=str(self.memory_mode),
+            system_config=str(self.system_config),
+            accelerator_configuration=str(self.accelerator_config),
+            arena_cache_size=float(self.arena_cache_size or 0.0),
+        )
+
+    @staticmethod
+    def _convert_pytorch_to_tosa(pytorch_file: Path, output_dir: Path) -> Path:
+        """Convert PyTorch model to TOSA format using mlia_pytorch_to_tosa_converter.
+
+        Accepts a PyTorch model file and an output directory,
+        and returns the path to the generated TOSA file.
+        Raises RuntimeError if conversion fails.
+        """
+        if not pytorch_file.is_file():
+            raise FileNotFoundError(f"Input file does not exist: {pytorch_file}")
+        if not is_pytorch_file(pytorch_file):
+            raise ValueError(
+                "Unsupported model file type. Only .pt2 files are supported."
+            )
+        logger.info("Converting PyTorch model %s to TOSA format", pytorch_file)
+        converter = _get_converter("pt2_to_tosa")
+        try:
+            tosa_file = converter(pytorch_file, output_dir)
+            logger.info("Successfully converted PyTorch model to TOSA: %s", tosa_file)
+            return tosa_file
+        except Exception as err:
+            raise RuntimeError(
+                f"Failed to convert PyTorch model {pytorch_file} to TOSA format"
+            ) from err
+
+    def _preprocess_model(self, model_path: Path) -> Path:
+        """Preprocess model file to supported format if needed.
+
+        Vela natively supports TFLite (.tflite) and TOSA (.tosa) files.
+        PyTorch (.pt2) files are converted to TOSA format first.
+        """
+        if model_path.suffix.lower() in _VELA_SUPPORTED_FILE_EXTENSIONS:
+            return model_path
+
+        if is_pytorch_file(model_path):
+            logger.info("Detected PyTorch model, converting to TOSA format")
+            tosa_file = self._convert_pytorch_to_tosa(model_path, self.output_dir)
+            return tosa_file
+
+        return model_path
+
     def read_model(self, model: str | Path) -> Model:
         """Read model."""
         logger.debug("Read model %s", model)
 
-        nng, network_type = self._read_model(model)
-        return Model(nng, network_type)
+        model_path = Path(model) if isinstance(model, str) else model
+        processed_model = self._preprocess_model(model_path)
+        if processed_model.suffix.lower() != ".tflite":
+            raise ConfigurationError(
+                "VelaCompiler.read_model supports only TFLite (.tflite) inputs. "
+                f"Got {processed_model.suffix or 'no extension'} from {model_path}."
+            )
+
+        _, compiled_model = self.compile_model(processed_model)
+        graph, network_type = self._read_model(compiled_model)
+
+        return Model(graph, network_type)
 
     def compile_model(
         self, model_path: Path, already_compiled: bool = False
     ) -> tuple[VelaSummary, Path]:
-        """Compile the model."""
+        """Compile the model.
+
+        Supports TFLite (.tflite), TOSA (.tosa), and PyTorch (.pt2) files.
+        PyTorch files are automatically converted to TOSA before compilation.
+        """
+        processed_model_path = self._preprocess_model(model_path)
+
+        if not processed_model_path.is_file():
+            raise RuntimeError(
+                f"Unable to read model {processed_model_path} (original: {model_path})"
+            )
+
         try:
             with redirect_raw_output(
                 logger, stdout_level=logging.DEBUG, stderr_level=logging.DEBUG
@@ -270,68 +377,97 @@ class VelaCompiler:  # pylint: disable=too-many-instance-attributes
                 tmp = sys.stdout
                 output_message = StringIO()
                 sys.stdout = output_message
-                main_args = [
-                    "--output-dir",
-                    str(self.output_dir.as_posix()),
-                    "--tensor-allocator",
-                    str(self.tensor_allocator),
-                    "--cpu-tensor-alignment",
-                    str(self.cpu_tensor_alignment),
-                    "--accelerator-config",
-                    str(self.accelerator_config),
-                    "--system-config",
-                    str(self.system_config),
-                    "--memory-mode",
-                    str(self.memory_mode),
-                    "--max-block-dependency",
-                    str(self.max_block_dependency),
-                    "--optimise",
-                    str(self.optimization_strategy),
-                    model_path.as_posix(),
-                    "--config",
-                    str(self.config_file),
-                    "--debug-force-regor",
-                ]
-                if self.verbose_performance:
-                    main_args.append("--verbose-performance")
-                if not already_compiled:
-                    main(main_args)
-                optimized_model_path = Path(
-                    self.output_dir.as_posix()
-                    + "/"
-                    + model_path.stem
-                    + "_vela"
-                    + model_path.suffix
-                )
-                sys.stdout = tmp
+                try:
+                    is_tosa_input = (
+                        processed_model_path.suffix.lower()
+                        in _TOSA_FILE_FORMAT_EXTENSIONS
+                    )
+                    output_format = "raw" if is_tosa_input else "tflite"
+                    output_extension = "_vela.npz" if is_tosa_input else "_vela.tflite"
+                    main_args = [
+                        "--output-dir",
+                        str(self.output_dir.as_posix()),
+                        "--tensor-allocator",
+                        str(self.tensor_allocator),
+                        "--cpu-tensor-alignment",
+                        str(self.cpu_tensor_alignment),
+                        "--accelerator-config",
+                        str(self.accelerator_config),
+                        "--system-config",
+                        str(self.system_config),
+                        "--memory-mode",
+                        str(self.memory_mode),
+                        "--max-block-dependency",
+                        str(self.max_block_dependency),
+                        "--optimise",
+                        str(self.optimization_strategy),
+                        "--output-format",
+                        output_format,
+                        processed_model_path.as_posix(),
+                        "--debug-force-regor",
+                    ]
+                    if self.config_file:
+                        main_args.extend(["--config", str(self.config_file)])
+                    if self.verbose_performance:
+                        main_args.append("--verbose-performance")
+                    if not already_compiled:
+                        main(main_args)
+                    optimized_model_path = Path(
+                        self.output_dir.as_posix()
+                        + "/"
+                        + processed_model_path.stem
+                        + output_extension
+                    )
+                finally:
+                    sys.stdout = tmp
                 if (
                     "Warning: SRAM target for arena memory area exceeded."
                     in output_message.getvalue()
                 ):
                     raise MemoryError("Model is too large and uses too much RAM")
-            summary_data = parse_summary_csv_file(
-                Path(
-                    self.output_dir.as_posix()
-                    + "/"
-                    + model_path.stem
-                    + "_summary_"
-                    + self.system_config
-                    + ".csv"
-                )
+            summary_csv_path = Path(
+                self.output_dir.as_posix()
+                + "/"
+                + processed_model_path.stem
+                + "_summary_"
+                + self.system_config
+                + ".csv"
             )
+            if not summary_csv_path.is_file():
+                summary_candidates = sorted(
+                    self.output_dir.glob(f"{processed_model_path.stem}_summary_*.csv")
+                )
+                if summary_candidates:
+                    summary_csv_path = summary_candidates[0]
+
+            if summary_csv_path.is_file():
+                summary_data = parse_summary_csv_file(summary_csv_path)
+            else:
+                logger.debug(
+                    "Vela summary CSV not found for model '%s', using empty summary.",
+                    processed_model_path,
+                )
+                summary_data = self._empty_summary()
             return summary_data, optimized_model_path
         except MemoryError as err:
             raise err
         except (SystemExit, Exception) as err:
             output_text = output_message.getvalue()
             # Check for various forms of invalid model errors
-            if isinstance(err, SystemExit) and (
-                "Error: Invalid tflite file." in output_text
-                or "Error: Invalid TFLite file." in output_text  # Case-sensitive fix
-                or "struct.error" in output_text
-                or "parsing" in output_text
+            if isinstance(err, FileNotFoundError) or (
+                isinstance(err, SystemExit)
+                and (
+                    "Error: Invalid tflite file." in output_text
+                    or "Error: Invalid TFLite file."
+                    in output_text  # Case-sensitive fix
+                    or "struct.error" in output_text
+                    or "parsing" in output_text
+                )
             ):
-                raise RuntimeError(f"Unable to read model {model_path}") from err
+                raise RuntimeError(
+                    f"Unable to read model {processed_model_path} "
+                    f"(original: {model_path})"
+                ) from err
             raise RuntimeError(
                 "Model could not be optimized with Vela compiler."
             ) from err

@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 import mlia
 import mlia.core.output_schema as schema
 from mlia.backend.errors import BackendUnavailableError
+from mlia.target.ethos_u.utils.model_format import is_pytorch_file, is_tosa_file
 from mlia.utils.filesystem import sha256
 from mlia.utils.logging import redirect_output
 
@@ -25,6 +26,8 @@ try:
     from ethosu.vela.vela import generate_supported_ops
 
     from mlia.backend.vela.compiler import VelaCompiler  # pylint: disable=C0412
+    from mlia.backend.vela.performance import layer_metrics
+    from mlia.backend.vela.performance import parse_layerwise_perf_csv
 
     _VELA_INSTALLED = True
 
@@ -38,6 +41,8 @@ except ImportError:
         from ethosu.vela.vela import generate_supported_ops
 
         from mlia.backend.vela.compiler import VelaCompiler
+        from mlia.backend.vela.performance import layer_metrics
+        from mlia.backend.vela.performance import parse_layerwise_perf_csv
     else:
 
         def __getattr__(name: str) -> Any:
@@ -50,6 +55,8 @@ except ImportError:
                 "generate_supported_ops",
                 "VelaCompiler",
                 "ethosu_vela_version",
+                "layer_metrics",
+                "parse_layerwise_perf_csv",
             }:
                 raise BackendUnavailableError("Backend vela is not available", "vela")
             raise AttributeError(name)
@@ -57,6 +64,24 @@ except ImportError:
     _VELA_INSTALLED = False
 
 logger = logging.getLogger(__name__)
+
+# Glob pattern for Vela layerwise CSV files
+_VELA_LAYERWISE_CSV_GLOB_PATTERN = "*{model_name}*per-layer.csv"
+
+# TFLite operator names to filter from layerwise data
+_TFLITE_LAYERWISE_FILTERED_OP_NAMES = ["Placeholder", "Const"]
+
+
+def _get_layerwise_csv_pattern(model_name: str) -> str:
+    """Format the layerwise CSV glob pattern for a model.
+
+    Args:
+        model_name: The model name to use in the pattern
+
+    Returns:
+        Formatted glob pattern string
+    """
+    return _VELA_LAYERWISE_CSV_GLOB_PATTERN.format(model_name=model_name)
 
 
 @dataclass
@@ -277,8 +302,83 @@ class VelaCompatibilityResult:
     standardized_output: dict[str, Any] | None = None
 
 
+def _supported_pytorch_operators(
+    model_path: Path,
+    compiler_options: Any,
+    vela_compiler: VelaCompiler,
+    vela_internal_ops: tuple,
+) -> Operators:
+    """Extract operators from PyTorch/TOSA models via layerwise CSV.
+
+    For PyTorch and TOSA files, we need to compile first and extract operators
+    from the layerwise CSV, since direct model reading after compilation shows
+    only fused ops.
+
+    Args:
+        model_path: Path to the PyTorch/TOSA model file
+        compiler_options: Vela compiler options
+        vela_compiler: VelaCompiler instance
+        vela_internal_ops: Tuple of internal Vela operations to filter out
+
+    Returns:
+        Operators object containing the model's operators
+    """
+    _, compiled_model_path = vela_compiler.compile_model(model_path)
+
+    output_dir = compiler_options.output_dir
+    model_name = model_path.stem
+    csv_pattern = _get_layerwise_csv_pattern(model_name)
+    csv_paths = list(Path(output_dir).glob(csv_pattern))
+
+    if not csv_paths:
+        logger.warning(
+            "Layerwise CSV not found for %s, reading compiled model directly",
+            compiled_model_path,
+        )
+        if compiled_model_path.suffix.lower() != ".tflite":
+            logger.warning(
+                "Compiled model is not TFLite (%s); skipping direct model read.",
+                compiled_model_path,
+            )
+            return Operators([])
+        # pylint: disable=protected-access
+        graph, _ = vela_compiler._read_model(compiled_model_path)
+        return Operators(
+            [
+                Operator(op.name, optype_to_builtintype(op.type), _run_on_npu(op))
+                for sg in graph.subgraphs
+                for op in sg.get_all_ops()
+                if op.type not in vela_internal_ops
+            ]
+        )
+
+    csv_path = csv_paths[0]
+    original_layerwise_info = parse_layerwise_perf_csv(
+        vela_csv_file=csv_path, metrics=layer_metrics
+    )
+
+    operators = [
+        Operator(
+            layer.name or f"op_{idx}",
+            layer.tflite_operator,
+            NpuSupported(True, []),
+        )
+        for idx, layer in enumerate(original_layerwise_info.layerwise_info)
+        if layer.tflite_operator
+        and layer.tflite_operator not in _TFLITE_LAYERWISE_FILTERED_OP_NAMES
+    ]
+
+    return Operators(operators)
+
+
 def supported_operators(model_path: Path, compiler_options: Any) -> Operators:
-    """Return list of model's operators."""
+    """Return list of model's operators.
+
+    For PyTorch and TOSA files, extracts operator information from Vela's
+    layerwise performance CSV which preserves original operator details.
+    For TFLite files, analyzes the model directly using Vela's Python API.
+    """
+    # pylint: disable=too-many-locals,protected-access
     if not get_vela():
         raise BackendUnavailableError("Backend vela is not available", "vela")
 
@@ -286,12 +386,18 @@ def supported_operators(model_path: Path, compiler_options: Any) -> Operators:
 
     vela_internal_ops = (Op.Placeholder, Op.SubgraphInput, Op.Const)
     vela_compiler = VelaCompiler(compiler_options)
-    initial_model = vela_compiler.read_model(model_path)
+
+    if is_pytorch_file(model_path) or is_tosa_file(model_path):
+        return _supported_pytorch_operators(
+            model_path, compiler_options, vela_compiler, vela_internal_ops
+        )
+
+    graph, _ = vela_compiler._read_model(model_path)
 
     return Operators(
         [
             Operator(op.name, optype_to_builtintype(op.type), _run_on_npu(op))
-            for sg in initial_model.nng.subgraphs
+            for sg in graph.subgraphs
             for op in sg.get_all_ops()
             if op.type not in vela_internal_ops
         ]

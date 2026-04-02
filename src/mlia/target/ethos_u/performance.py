@@ -20,11 +20,20 @@ from mlia.backend.corstone.performance import (
 from mlia.backend.errors import BackendUnavailableError
 from mlia.backend.vela.performance import LayerwisePerfInfo
 from mlia.core.context import Context, ExecutionContext
+from mlia.core.errors import ConfigurationError
 from mlia.core.performance import PerformanceEstimator
 from mlia.target.ethos_u.optimization_shims import OptimizationSettings
-from mlia.target.ethos_u.tflite_shims import ModelConfiguration, get_tflite_model
+from mlia.target.ethos_u.utils.tflite_shims import (
+    ModelConfiguration,
+    get_tflite_model,
+)
 from mlia.target.ethos_u.config import EthosUConfiguration
 from mlia.target.registry import supported_backends
+from mlia.target.ethos_u.utils.model_format import (
+    is_pytorch_file,
+    is_tflite_model,
+    is_tosa_file,
+)
 from mlia.utils.logging import log_action
 
 logger = logging.getLogger(__name__)
@@ -335,7 +344,23 @@ class EthosUPerformanceEstimator(
             Path(model.model_path) if isinstance(model, ModelConfiguration) else model
         )
 
-        tflite_model = get_tflite_model(model_path, self.context)
+        if not any(
+            [
+                is_tflite_model(model_path),
+                is_tosa_file(model_path),
+                is_pytorch_file(model_path),
+            ]
+        ):
+            raise ConfigurationError(
+                "Input must be a TFLite, TOSA or PyTorch .pt2 file."
+            )
+
+        model_to_estimate: Path | ModelConfiguration
+        if is_pytorch_file(model_path) or is_tosa_file(model_path):
+            model_to_estimate = model_path
+        else:
+            tflite_model = get_tflite_model(model_path, self.context)
+            model_to_estimate = tflite_model
 
         memory_usage = None
         npu_cycles = None
@@ -348,7 +373,7 @@ class EthosUPerformanceEstimator(
                     self.context, self.target_config
                 )
                 memory_usage, layerwise_perf_info = vela_estimator.estimate(
-                    tflite_model
+                    model_to_estimate
                 )
                 # Store the raw vela metrics for standardized output
                 # VelaPerformanceEstimator.estimate() stores vela_perf_metrics on self
@@ -364,7 +389,7 @@ class EthosUPerformanceEstimator(
                     self.context, self.target_config, backend
                 )
                 # Get NPUCycles for legacy display and save the raw backend metrics
-                npu_cycles = corstone_estimator.estimate(tflite_model)
+                npu_cycles = corstone_estimator.estimate(model_to_estimate)
                 # Store the original corstone backend metrics for standardized output
                 corstone_metrics = corstone_estimator.backend_metrics
             else:

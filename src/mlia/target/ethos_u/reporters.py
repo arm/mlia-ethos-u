@@ -27,7 +27,7 @@ from mlia.core.reporting import (
     SingleRow,
     Table,
 )
-from mlia.target.ethos_u.tflite_shims import TFLiteCompatibilityInfo
+from mlia.target.ethos_u.utils.tflite_shims import TFLiteCompatibilityInfo
 from mlia.target.ethos_u.common_reporters import report_tflite_compatiblity
 from mlia.target.ethos_u.config import EthosUConfiguration
 from mlia.target.ethos_u.performance import PerformanceMetrics

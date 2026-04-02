@@ -19,7 +19,7 @@ from mlia.core.data_analysis import (
 )
 from mlia.target.ethos_u.common_reporters import analyze_tflite_compatibility_common
 from mlia.target.ethos_u.optimization_shims import OptimizationSettings
-from mlia.target.ethos_u.tflite_shims import TFLiteCompatibilityInfo
+from mlia.target.ethos_u.utils.tflite_shims import TFLiteCompatibilityInfo
 from mlia.target.ethos_u.performance import (
     CombinedPerformanceResult,
     CorstonePerformanceResult,

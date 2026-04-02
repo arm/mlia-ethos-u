@@ -14,9 +14,10 @@ from mlia.backend.vela.performance import LayerwisePerfInfo
 from mlia.backend.vela.performance import PerformanceMetrics as VelaPerf
 from mlia.core.context import Context, ExecutionContext
 from mlia.core.data_collection import DataCollector
+from mlia.core.errors import ConfigurationError
 from mlia.core.errors import FunctionalityNotSupportedError
 from mlia.target.ethos_u.optimization_shims import OptimizationSettings
-from mlia.target.ethos_u.legacy_shims import (
+from mlia.target.ethos_u.utils.legacy_shims import (
     LEGACY_OPTIMIZATION_AVAILABLE,
     add_common_optimization_params,
 )
@@ -293,12 +294,16 @@ def mock_performance_estimation_with_corstone(
         LayerwisePerfInfo(layerwise_info=[]),
     )
     metrics.corstone_metrics = MagicMock(spec=CorstonePerf)
-    metrics.to_standardized_output = MagicMock(  # type: ignore[method-assign]
-        return_value={
-            "schema_version": "1.0.0",
-            "backends": [{"id": "corstone-310"}],
-            "results": [{"kind": "performance"}],
-        }
+    setattr(
+        metrics,
+        "to_standardized_output",
+        MagicMock(
+            return_value={
+                "schema_version": "1.0.0",
+                "backends": [{"id": "corstone-310"}],
+                "results": [{"kind": "performance"}],
+            }
+        ),
     )
 
     monkeypatch.setattr(
@@ -318,12 +323,16 @@ def mock_performance_estimation_with_both(
         LayerwisePerfInfo(layerwise_info=[]),
     )
     metrics.corstone_metrics = MagicMock(spec=CorstonePerf)
-    metrics.to_standardized_output = MagicMock(  # type: ignore[method-assign]
-        return_value={
-            "schema_version": "1.0.0",
-            "backends": [{"id": "corstone-310"}],
-            "results": [{"kind": "performance", "producer": "corstone-310"}],
-        }
+    setattr(
+        metrics,
+        "to_standardized_output",
+        MagicMock(
+            return_value={
+                "schema_version": "1.0.0",
+                "backends": [{"id": "corstone-310"}],
+                "results": [{"kind": "performance", "producer": "corstone-310"}],
+            }
+        ),
     )
 
     mock_estimator = MagicMock()
@@ -340,3 +349,174 @@ def mock_performance_estimation_with_both(
         "mlia.target.ethos_u.data_collection.EthosUPerformanceEstimator",
         MagicMock(return_value=mock_estimator),
     )
+
+
+def test_operator_compatibility_pytorch_model(
+    monkeypatch: pytest.MonkeyPatch, sample_context: Context, tmp_path: Path
+) -> None:
+    """Test operator compatibility with PyTorch model."""
+    target = EthosUConfiguration.load_profile("ethos-u55-256")
+
+    pytorch_model = tmp_path / "model.pt2"
+    pytorch_model.write_text("mock pytorch model")
+
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.data_collection.is_pytorch_file",
+        MagicMock(return_value=True),
+    )
+
+    mock_result = MagicMock(spec=VelaCompatibilityResult)
+    mock_result.legacy_info = MagicMock(spec=Operators)
+    mock_result.to_standardized_output = MagicMock(return_value={})
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.data_collection.supported_operators",
+        MagicMock(return_value=mock_result),
+    )
+
+    collector = EthosUOperatorCompatibility(pytorch_model, target)
+    collector.set_context(sample_context)
+
+    result = collector.collect_data()
+    assert isinstance(result, VelaCompatibilityResult)
+
+
+def test_operator_compatibility_tosa_model(
+    monkeypatch: pytest.MonkeyPatch, sample_context: Context, tmp_path: Path
+) -> None:
+    """Test operator compatibility with TOSA model."""
+    target = EthosUConfiguration.load_profile("ethos-u55-256")
+
+    tosa_model = tmp_path / "model.tosa"
+    tosa_model.write_text("mock tosa model")
+
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.data_collection.is_pytorch_file",
+        MagicMock(return_value=False),
+    )
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.data_collection.is_tosa_file",
+        MagicMock(return_value=True),
+    )
+
+    mock_result = MagicMock(spec=VelaCompatibilityResult)
+    mock_result.legacy_info = MagicMock(spec=Operators)
+    mock_result.to_standardized_output = MagicMock(return_value={})
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.data_collection.supported_operators",
+        MagicMock(return_value=mock_result),
+    )
+
+    collector = EthosUOperatorCompatibility(tosa_model, target)
+    collector.set_context(sample_context)
+
+    result = collector.collect_data()
+    assert isinstance(result, VelaCompatibilityResult)
+
+
+def test_performance_collector_pytorch_model(
+    monkeypatch: pytest.MonkeyPatch, sample_context: Context, tmp_path: Path
+) -> None:
+    """Test performance collector with PyTorch model."""
+    target = EthosUConfiguration.load_profile("ethos-u55-256")
+
+    pytorch_model = tmp_path / "model.pt2"
+    pytorch_model.write_text("mock pytorch model")
+
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.data_collection.is_pytorch_file",
+        MagicMock(return_value=True),
+    )
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.data_collection.is_tosa_file",
+        MagicMock(return_value=False),
+    )
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.data_collection.is_tflite_model",
+        MagicMock(return_value=False),
+    )
+
+    mock_performance_estimation(monkeypatch, target)
+
+    collector = EthosUPerformance(pytorch_model, target)
+    collector.set_context(sample_context)
+
+    result = collector.collect_data()
+    assert isinstance(result, PerformanceMetrics)
+
+
+def test_performance_collector_pytorch_requires_vela_backend(
+    monkeypatch: pytest.MonkeyPatch, sample_context: Context, tmp_path: Path
+) -> None:
+    """Test PyTorch performance requires Vela backend only."""
+    target = EthosUConfiguration.load_profile("ethos-u55-256")
+
+    pytorch_model = tmp_path / "model.pt2"
+    pytorch_model.write_text("mock pytorch model")
+
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.data_collection.is_pytorch_file",
+        MagicMock(return_value=True),
+    )
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.data_collection.is_tosa_file",
+        MagicMock(return_value=False),
+    )
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.data_collection.is_tflite_model",
+        MagicMock(return_value=False),
+    )
+
+    mock_performance_estimation(monkeypatch, target)
+
+    collector = EthosUPerformance(pytorch_model, target, backends=["corstone-300"])
+    collector.set_context(sample_context)
+
+    with pytest.raises(ConfigurationError, match="Vela backend"):
+        collector.collect_data()
+
+
+def test_performance_collector_tosa_model(
+    monkeypatch: pytest.MonkeyPatch, sample_context: Context, tmp_path: Path
+) -> None:
+    """Test performance collector with TOSA model."""
+    target = EthosUConfiguration.load_profile("ethos-u55-256")
+
+    tosa_model = tmp_path / "model.tosa"
+    tosa_model.write_text("mock tosa model")
+
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.data_collection.is_pytorch_file",
+        MagicMock(return_value=False),
+    )
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.data_collection.is_tosa_file",
+        MagicMock(return_value=True),
+    )
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.data_collection.is_tflite_model",
+        MagicMock(return_value=False),
+    )
+
+    mock_performance_estimation(monkeypatch, target)
+
+    collector = EthosUPerformance(tosa_model, target)
+    collector.set_context(sample_context)
+
+    result = collector.collect_data()
+    assert isinstance(result, PerformanceMetrics)
+
+
+def test_performance_collector_invalid_model_format(
+    sample_context: Context, tmp_path: Path
+) -> None:
+    """Test performance collector with invalid model format."""
+    target = EthosUConfiguration.load_profile("ethos-u55-256")
+
+    invalid_model = tmp_path / "model.txt"
+    invalid_model.write_text("not a model")
+
+    collector = EthosUPerformance(invalid_model, target)
+    collector.set_context(sample_context)
+
+    with pytest.raises(ConfigurationError, match="Input must be a TFLite"):
+        collector.collect_data()

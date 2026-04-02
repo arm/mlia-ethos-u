@@ -14,11 +14,9 @@ import tensorflow as tf
 import tf_keras as keras
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-WORKSPACE_ROOT = REPO_ROOT.parent
-CORE_SRC = WORKSPACE_ROOT / "mlia-core" / "src"
 PLUGIN_SRC = REPO_ROOT / "src"
 
-sys.path.insert(0, str(CORE_SRC))
+# Use installed mlia-core; only add plugin src for local changes.
 sys.path.insert(0, str(PLUGIN_SRC))
 
 from mlia.core.context import ExecutionContext  # noqa: E402

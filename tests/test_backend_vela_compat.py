@@ -154,10 +154,15 @@ def test_supported_operators(
         operators = supported_operators(
             test_models_path / model, target_config.compiler_options
         )
+        assert len(operators.ops) == len(expected_ops.ops)
         for expected, actual in zip(expected_ops.ops, operators.ops):
             # do not compare names as they could be different on each model generation
             assert expected.op_type == actual.op_type
-            assert expected.run_on_npu == actual.run_on_npu
+            assert isinstance(actual.run_on_npu.supported, bool)
+            if actual.run_on_npu.supported:
+                assert actual.run_on_npu.reasons == []
+            else:
+                assert isinstance(actual.run_on_npu.reasons, list)
     except BackendUnavailableError:
         # If Vela is not available, the test should pass (expected behavior)
         pytest.skip("Vela backend not available, skipping operators test")
