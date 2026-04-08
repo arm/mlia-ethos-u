@@ -155,13 +155,16 @@ class EthosUInferenceAdvisor(DefaultInferenceAdvisor):
 
     def _get_optimization_settings(self, context: Context) -> list[list[dict]]:
         """Get optimization settings."""
-        return self.get_parameter(  # type: ignore
+        settings = self.get_parameter(
             _get_optimization_collector_name(),
             "optimizations",
             expected_type=list,
             expected=False,
             context=context,
         )
+
+        # Normalize missing settings to an empty list for callers.
+        return settings or []
 
     def _get_backends(self, context: Context) -> list[str] | None:
         """Get list of backends."""
