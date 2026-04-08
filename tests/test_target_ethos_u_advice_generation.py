@@ -13,7 +13,7 @@ from mlia.core.common import AdviceCategory, DataItem
 from mlia.core.context import ExecutionContext
 from mlia.core.helpers import ActionResolver, APIActionResolver
 from mlia.core.output_schema import AdviceCategory as SchemaAdviceCategory
-from mlia.core.output_schema import AdviceSeverity
+from mlia.core.output_schema import AdviceSeverity, OperatorIdentifier, OperatorScope
 from mlia.target.ethos_u.optimization_shims import OptimizationSettings
 from mlia.target.ethos_u.advice_generation import (
     EthosUAdviceProducer,
@@ -27,12 +27,23 @@ from mlia.target.ethos_u.data_analysis import (
     OptimizationResults,
     PerfMetricDiff,
 )
+from mlia.target.ethos_u.pattern_analysis import IneffectiveActivationPattern
+
+
+def assert_advices_match(actual: list[Advice], expected: list[Advice]) -> None:
+    """Assert the advice fields relevant to Ethos-U behavior."""
+    assert len(actual) == len(expected)
+    for actual_adv, expected_adv in zip(actual, expected):
+        assert actual_adv.message == expected_adv.message
+        assert actual_adv.category == expected_adv.category
+        assert actual_adv.severity == expected_adv.severity
+        assert actual_adv.affected_entities == expected_adv.affected_entities
 
 
 @pytest.mark.parametrize(
     "input_data, advice_category, action_resolver, expected_advice",
     [
-        [
+        pytest.param(
             AllOperatorsSupportedOnNPU(),
             {AdviceCategory.COMPATIBILITY},
             APIActionResolver(),
@@ -47,8 +58,9 @@ from mlia.target.ethos_u.data_analysis import (
                     ),
                 )
             ],
-        ],
-        [
+            id="all_ops_supported_compat_api",
+        ),
+        pytest.param(
             AllOperatorsSupportedOnNPU(),
             {AdviceCategory.COMPATIBILITY},
             CLIActionResolver(
@@ -71,8 +83,9 @@ from mlia.target.ethos_u.data_analysis import (
                     ),
                 )
             ],
-        ],
-        [
+            id="all_ops_supported_compat_cli_perf_cmd",
+        ),
+        pytest.param(
             HasCPUOnlyOperators(cpu_only_ops=["OP1", "OP2", "OP3"]),
             {AdviceCategory.COMPATIBILITY},
             APIActionResolver(),
@@ -80,7 +93,7 @@ from mlia.target.ethos_u.data_analysis import (
                 Advice(
                     id="0",
                     category=SchemaAdviceCategory.COMPATIBILITY,
-                    severity=AdviceSeverity.INFO,
+                    severity=AdviceSeverity.WARNING,
                     message=(
                         "You have at least 3 operators that is CPU only: "
                         "OP1,OP2,OP3. Using operators that are supported by "
@@ -88,8 +101,9 @@ from mlia.target.ethos_u.data_analysis import (
                     ),
                 )
             ],
-        ],
-        [
+            id="cpu_only_ops_compat_api",
+        ),
+        pytest.param(
             HasCPUOnlyOperators(cpu_only_ops=["OP1", "OP2", "OP3"]),
             {AdviceCategory.COMPATIBILITY},
             CLIActionResolver({}),
@@ -97,7 +111,7 @@ from mlia.target.ethos_u.data_analysis import (
                 Advice(
                     id="0",
                     category=SchemaAdviceCategory.COMPATIBILITY,
-                    severity=AdviceSeverity.INFO,
+                    severity=AdviceSeverity.WARNING,
                     message=(
                         "You have at least 3 operators that is CPU only: "
                         "OP1,OP2,OP3. Using operators that are supported "
@@ -105,8 +119,9 @@ from mlia.target.ethos_u.data_analysis import (
                     ),
                 )
             ],
-        ],
-        [
+            id="cpu_only_ops_compat_cli",
+        ),
+        pytest.param(
             HasUnsupportedOnNPUOperators(npu_unsupported_ratio=0.4),
             {AdviceCategory.COMPATIBILITY},
             APIActionResolver(),
@@ -114,7 +129,7 @@ from mlia.target.ethos_u.data_analysis import (
                 Advice(
                     id="0",
                     category=SchemaAdviceCategory.COMPATIBILITY,
-                    severity=AdviceSeverity.INFO,
+                    severity=AdviceSeverity.WARNING,
                     message=(
                         "You have 40% of operators that cannot be placed on "
                         "the NPU. For better performance, please review the "
@@ -123,8 +138,9 @@ from mlia.target.ethos_u.data_analysis import (
                     ),
                 )
             ],
-        ],
-        [
+            id="unsupported_ops_compat_api",
+        ),
+        pytest.param(
             HasUnsupportedOnNPUOperators(npu_unsupported_ratio=0.4),
             {AdviceCategory.COMPATIBILITY},
             CLIActionResolver({}),
@@ -132,7 +148,7 @@ from mlia.target.ethos_u.data_analysis import (
                 Advice(
                     id="0",
                     category=SchemaAdviceCategory.COMPATIBILITY,
-                    severity=AdviceSeverity.INFO,
+                    severity=AdviceSeverity.WARNING,
                     message=(
                         "You have 40% of operators that cannot be placed "
                         "on the NPU. For better performance, please review "
@@ -141,8 +157,44 @@ from mlia.target.ethos_u.data_analysis import (
                     ),
                 )
             ],
-        ],
-        [
+            id="unsupported_ops_compat_cli",
+        ),
+        pytest.param(
+            IneffectiveActivationPattern(
+                affected_layers=["Layer1", "Layer2"],
+                layer_count=2,
+                activation_types=["MISH", "SELU"],
+                recommendation="Consider replacing them with NPU-friendly alternatives.",
+            ),
+            {AdviceCategory.PERFORMANCE},
+            APIActionResolver(),
+            [
+                Advice(
+                    id="0",
+                    category=SchemaAdviceCategory.PERFORMANCE,
+                    severity=AdviceSeverity.WARNING,
+                    message=(
+                        "Detected 2 layers using "
+                        "suboptimal activation functions (MISH, SELU). "
+                        "Consider replacing them with NPU-friendly alternatives."
+                    ),
+                    affected_entities=[
+                        OperatorIdentifier(
+                            scope=OperatorScope.OPERATOR,
+                            name="Layer1",
+                            location="Layer1",
+                        ),
+                        OperatorIdentifier(
+                            scope=OperatorScope.OPERATOR,
+                            name="Layer2",
+                            location="Layer2",
+                        ),
+                    ],
+                )
+            ],
+            id="ineffective_activation_pattern_perf_api",
+        ),
+        pytest.param(
             OptimizationResults(
                 [
                     OptimizationDiff(
@@ -186,8 +238,9 @@ from mlia.target.ethos_u.data_analysis import (
                     ),
                 ),
             ],
-        ],
-        [
+            id="opt_results_pruning_api",
+        ),
+        pytest.param(
             OptimizationResults(
                 [
                     OptimizationDiff(
@@ -218,8 +271,8 @@ from mlia.target.ethos_u.data_analysis import (
                         "try to push the optimization target higher "
                         "(e.g. pruning: 0.6) to check if those results "
                         "can be further improved. For more info: mlia "
-                        "check --help Optimization command: mlia "
-                        "check sample_model.h5 --performance "
+                        "optimize --help Optimization command: mlia "
+                        "optimize sample_model.h5 --pruning "
                         "--pruning-target 0.6"
                     ),
                 ),
@@ -234,8 +287,9 @@ from mlia.target.ethos_u.data_analysis import (
                     ),
                 ),
             ],
-        ],
-        [
+            id="opt_results_pruning_cli",
+        ),
+        pytest.param(
             OptimizationResults(
                 [
                     OptimizationDiff(
@@ -283,8 +337,9 @@ from mlia.target.ethos_u.data_analysis import (
                     ),
                 ),
             ],
-        ],
-        [
+            id="opt_results_pruning_clustering_api",
+        ),
+        pytest.param(
             OptimizationResults(
                 [
                     OptimizationDiff(
@@ -327,8 +382,9 @@ from mlia.target.ethos_u.data_analysis import (
                     ),
                 ),
             ],
-        ],
-        [
+            id="opt_results_clustering_api",
+        ),
+        pytest.param(
             OptimizationResults(
                 [
                     OptimizationDiff(
@@ -349,7 +405,7 @@ from mlia.target.ethos_u.data_analysis import (
                 Advice(
                     id="0",
                     category=SchemaAdviceCategory.OPTIMIZATION,
-                    severity=AdviceSeverity.INFO,
+                    severity=AdviceSeverity.WARNING,
                     message=(
                         "With the selected optimization (pruning: 0.5) - "
                         "DRAM used (KB) have degraded by 50.00% - SRAM "
@@ -373,8 +429,9 @@ from mlia.target.ethos_u.data_analysis import (
                     ),
                 ),
             ],
-        ],
-        [
+            id="opt_results_degraded_perf_api",
+        ),
+        pytest.param(
             OptimizationResults(
                 [
                     OptimizationDiff(
@@ -402,7 +459,8 @@ from mlia.target.ethos_u.data_analysis import (
             {AdviceCategory.OPTIMIZATION},
             APIActionResolver(),
             [],  # no advice for more than one optimization result
-        ],
+            id="opt_results_multiple_diff_no_advice_api",
+        ),
     ],
 )
 def test_ethosu_advice_producer(
@@ -413,8 +471,6 @@ def test_ethosu_advice_producer(
     action_resolver: ActionResolver,
 ) -> None:
     """Test Ethos-U Advice producer."""
-    if advice_category and AdviceCategory.OPTIMIZATION in advice_category:
-        pytest.skip("Optimization advice is out of scope for this plugin.")
     producer = EthosUAdviceProducer()
 
     context = ExecutionContext(
@@ -428,25 +484,25 @@ def test_ethosu_advice_producer(
 
     actual = producer.get_advice()
     assert isinstance(actual, list)
-    assert len(actual) == len(expected_advice)
-    for actual_adv, expected_adv in zip(actual, expected_advice):
-        assert actual_adv.message == expected_adv.message
+    assert_advices_match(actual, expected_advice)
 
 
 @pytest.mark.parametrize(
     "advice_category, action_resolver, expected_advice",
     [
-        [
+        pytest.param(
             {AdviceCategory.COMPATIBILITY, AdviceCategory.PERFORMANCE},
             None,
             [],
-        ],
-        [
+            id="static_compat_perf_no_resolver",
+        ),
+        pytest.param(
             {AdviceCategory.COMPATIBILITY},
             None,
             [],
-        ],
-        [
+            id="static_compat_no_resolver",
+        ),
+        pytest.param(
             {AdviceCategory.PERFORMANCE},
             APIActionResolver(),
             [
@@ -469,8 +525,9 @@ def test_ethosu_advice_producer(
                     ),
                 ),
             ],
-        ],
-        [
+            id="static_perf_api",
+        ),
+        pytest.param(
             {AdviceCategory.PERFORMANCE},
             CLIActionResolver(
                 {"model": "test_model.h5", "target_profile": "sample_target"}
@@ -502,8 +559,9 @@ def test_ethosu_advice_producer(
                     ),
                 ),
             ],
-        ],
-        [
+            id="static_perf_cli_with_cmd",
+        ),
+        pytest.param(
             {AdviceCategory.OPTIMIZATION},
             APIActionResolver(),
             [
@@ -518,8 +576,9 @@ def test_ethosu_advice_producer(
                     ),
                 )
             ],
-        ],
-        [
+            id="static_optim_api",
+        ),
+        pytest.param(
             {AdviceCategory.OPTIMIZATION},
             CLIActionResolver({"model": "test_model.h5"}),
             [
@@ -535,7 +594,8 @@ def test_ethosu_advice_producer(
                     ),
                 )
             ],
-        ],
+            id="static_optim_cli",
+        ),
     ],
 )
 def test_ethosu_static_advice_producer(
@@ -545,8 +605,6 @@ def test_ethosu_static_advice_producer(
     expected_advice: list[Advice],
 ) -> None:
     """Test static advice generation."""
-    if advice_category and AdviceCategory.OPTIMIZATION in advice_category:
-        pytest.skip("Optimization advice is out of scope for this plugin.")
     producer = EthosUStaticAdviceProducer()
 
     context = ExecutionContext(
@@ -557,6 +615,4 @@ def test_ethosu_static_advice_producer(
     producer.set_context(context)
     actual = producer.get_advice()
     assert isinstance(actual, list)
-    assert len(actual) == len(expected_advice)
-    for actual_adv, expected_adv in zip(actual, expected_advice):
-        assert actual_adv.message == expected_adv.message
+    assert_advices_match(actual, expected_advice)
