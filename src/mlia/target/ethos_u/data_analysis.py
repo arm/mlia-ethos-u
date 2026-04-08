@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from functools import singledispatchmethod
 
@@ -26,6 +27,8 @@ from mlia.target.ethos_u.performance import (
     VelaPerformanceResult,
     OptimizationPerformanceMetrics,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -207,9 +210,11 @@ class EthosUDataAnalyzer(FactExtractor):
     @singledispatchmethod
     def analyze_data(self, data_item: DataItem) -> None:  # type: ignore
         """Analyze the data."""
-        print(
-            f"DEBUG: Unhandled data_item type: {type(data_item)} - "
-            f"{data_item.__class__.__module__}.{data_item.__class__.__name__}"
+        logger.debug(
+            "Unhandled data_item type: %s - %s.%s",
+            type(data_item),
+            data_item.__class__.__module__,
+            data_item.__class__.__name__,
         )
 
     @analyze_data.register
@@ -353,9 +358,11 @@ class EthosUDataAnalyzer(FactExtractor):
         """Analyze combined performance results."""
         standard_out = getattr(data_item, "standardized_output", None)
         if not standard_out or not isinstance(standard_out, dict):
-            print(
-                f"DEBUG: No standardized output for: {type(data_item)} - "
-                f"{data_item.__class__.__module__}.{data_item.__class__.__name__}"
+            logger.debug(
+                "No standardized output for: %s - %s.%s",
+                type(data_item),
+                data_item.__class__.__module__,
+                data_item.__class__.__name__,
             )
             return
         corstone_result = 1
@@ -371,9 +378,11 @@ class EthosUDataAnalyzer(FactExtractor):
         """Analyze Corstone-only performance results."""
         standard_out = getattr(data_item, "standardized_output", None)
         if not standard_out or not isinstance(standard_out, dict):
-            print(
-                f"DEBUG: No standardized output for: {type(data_item)} - "
-                f"{data_item.__class__.__module__}.{data_item.__class__.__name__}"
+            logger.debug(
+                "No standardized output for: %s - %s.%s",
+                type(data_item),
+                data_item.__class__.__module__,
+                data_item.__class__.__name__,
             )
             return
         corstone_result = 0
@@ -387,9 +396,11 @@ class EthosUDataAnalyzer(FactExtractor):
         """Analyze combined performance results."""
         standard_out = getattr(data_item, "standardized_output", None)
         if not standard_out or not isinstance(standard_out, dict):
-            print(
-                f"DEBUG: No standardized output for: {type(data_item)} - "
-                f"{data_item.__class__.__module__}.{data_item.__class__.__name__}"
+            logger.debug(
+                "No standardized output for: %s - %s.%s",
+                type(data_item),
+                data_item.__class__.__module__,
+                data_item.__class__.__name__,
             )
             return
         vela_result = 0
