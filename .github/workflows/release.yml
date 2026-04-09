@@ -15,6 +15,7 @@ permissions:
 
 env:
   PYTHON_VERSION: "3.10"
+  ARTIFACTS_PATH: downloaded_artifacts
   UV_DEFAULT_INDEX: ${{ secrets.INTERNAL_PYPI_HOST && format('internal={0}', secrets.INTERNAL_PYPI_HOST) || '' }}
   UV_INDEX_INTERNAL_USERNAME: ${{ secrets.INTERNAL_PYPI_HOST && secrets.INTERNAL_PYPI_USERNAME || '' }}
   UV_INDEX_INTERNAL_PASSWORD: ${{ secrets.INTERNAL_PYPI_HOST && secrets.INTERNAL_PYPI_PASSWORD || '' }}
@@ -51,19 +52,129 @@ jobs:
         with:
           name: coverage-report
           path: coverage.xml
+      - name: Upload built wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: built-wheel
+          path: dist/*
 
-  publish_release:
-    name: Publish Release
+  test_e2e:
+    name: End-to-End Tests (Shard ${{ matrix.display_index }}/${{ matrix.total }})
+    if: ${{ github.repository_owner != 'arm' }}
     runs-on: ["${{ vars.UBUNTU_RUNNER }}", "X64"]
-    needs: build_and_test_wheel
+    needs:
+      - build_and_test_wheel
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {index: 0, display_index: 1, total: 4}
+          - {index: 1, display_index: 2, total: 4}
+          - {index: 2, display_index: 3, total: 4}
+          - {index: 3, display_index: 4, total: 4}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
         with:
-          fetch-depth: 0
+          name: built-wheel
+          path: dist
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      - run: uv build
+      - name: Prepare artifacts
+        if: ${{ vars.MLIA_E2E_ARTIFACTS != '' }}
+        uses: Arm-Debug/github-workflow-wizardry/.github/actions/prepare-artifacts@main
+        env:
+          ARTIFACT_HTTP_SOURCE_HOST: ${{ vars.ARTIFACT_HTTP_SOURCE_HOST }}
+          ARTIFACT_HTTP_SOURCE_AUTH: ${{ vars.ARTIFACT_HTTP_SOURCE_AUTH }}
+          ARTIFACT_HTTP_SOURCE_TOKEN: ${{ secrets.ARTIFACT_HTTP_SOURCE_TOKEN }}
+        with:
+          artifacts: ${{ vars.MLIA_E2E_ARTIFACTS }}
+          destination: ${{ env.ARTIFACTS_PATH }}
+      - run: uv sync --no-sources --no-install-project --only-group test
+      # Ensure pip is available because mlia-backend install shells out to python -m pip for backend dependencies.
+      - run: ./.venv/bin/python -m ensurepip --upgrade
+      - name: Run e2e pytest
+        env:
+          MLIA_E2E_ARTIFACTS: ${{ env.ARTIFACTS_PATH }}
+          MLIA_E2E_BACKENDS: ${{ vars.MLIA_E2E_BACKENDS }}
+          MLIA_E2E_EXECUTIONS: ${{ vars.MLIA_E2E_EXECUTIONS }}
+          MLIA_E2E_SHARD_INDEX: ${{ matrix.index }}
+          MLIA_E2E_SHARD_COUNT: ${{ matrix.total }}
+        run: |
+          mkdir -p report
+          rm -f "report/report-${{ matrix.index }}.xml"
+          rm -rf "report/pdf-${{ matrix.index }}"
+          set -o pipefail
+          uv run --no-sync \
+            --with dist/*.whl \
+            -- pytest -v tests/test_e2e.py \
+              -x \
+              -s \
+              --capture=tee-sys \
+              -o junit_logging=out-err \
+              -o junit_log_passing_tests=true \
+              --no-cov \
+              --junitxml="report/report-${{ matrix.index }}.xml"
+      - name: Upload e2e junit
+        if: ${{ always() && hashFiles(format('report/report-{0}.xml', matrix.index)) != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-junit-shard-${{ matrix.index }}
+          path: report/report-${{ matrix.index }}.xml
+
+  combine_e2e_pdf:
+    name: Combine E2E PDF Reports
+    if: ${{ always() && github.repository_owner != 'arm' }}
+    runs-on: ["${{ vars.UBUNTU_RUNNER }}", "X64"]
+    needs:
+      - test_e2e
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Download shard junit artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: e2e-junit-shard-*
+          path: report/junit
+          merge-multiple: true
+      - name: Convert combined JUnit to PDF
+        if: ${{ hashFiles('report/junit/*.xml') != '' }}
+        uses: Arm-Debug/github-workflow-wizardry/.github/actions/junit-to-pdf@main
+        with:
+          report-path: report/junit
+          output-dir: report/pdf-combined
+      - name: Upload combined e2e pdf
+        if: ${{ hashFiles('report/pdf-combined/*.pdf') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-pdf
+          path: report/pdf-combined
+
+  publish_release:
+    name: Publish Release
+    if: >-
+      ${{
+        always() &&
+        needs.build_and_test_wheel.result == 'success' &&
+        (github.repository_owner != 'arm' || github.ref_type == 'tag') &&
+        (github.repository_owner == 'arm' || needs.test_e2e.result == 'success')
+      }}
+    runs-on: ["${{ vars.UBUNTU_RUNNER }}", "X64"]
+    needs:
+      - build_and_test_wheel
+      - test_e2e
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: built-wheel
+          path: dist
       - run: uv publish dist/*
         env:
           UV_PUBLISH_URL: ${{ secrets.PUBLISH_PYPI_HOST }}
