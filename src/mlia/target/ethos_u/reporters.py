@@ -28,7 +28,7 @@ from mlia.core.reporting import (
     Table,
 )
 from mlia.target.ethos_u.utils.tflite_shims import TFLiteCompatibilityInfo
-from mlia.target.ethos_u.common_reporters import report_tflite_compatiblity
+from mlia.target.ethos_u.common_reporters import report_tflite_compatibility
 from mlia.target.ethos_u.config import EthosUConfiguration
 from mlia.target.ethos_u.performance import PerformanceMetrics
 from mlia.utils.console import style_improvement
@@ -465,6 +465,6 @@ def ethos_u_formatters(data: Any) -> Callable[..., Report]:
         return CompoundFormatter(formatters)
 
     if isinstance(data, TFLiteCompatibilityInfo):
-        return report_tflite_compatiblity
+        return report_tflite_compatibility
 
     raise RuntimeError(f"Unable to find appropriate formatter for {data}.")

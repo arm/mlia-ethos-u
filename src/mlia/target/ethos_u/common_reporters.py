@@ -31,7 +31,7 @@ class ModelHasCustomOperators(Fact):
     """Model could not be loaded because it contains custom ops."""
 
 
-def report_tflite_compatiblity(compat_info: TFLiteCompatibilityInfo) -> Report:
+def report_tflite_compatibility(compat_info: TFLiteCompatibilityInfo) -> Report:
     """Generate report for the TensorFlow Lite compatibility information."""
     if getattr(compat_info, "conversion_errors", None):
         return Table(
