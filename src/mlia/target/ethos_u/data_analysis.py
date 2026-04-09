@@ -64,12 +64,6 @@ class EthosULayerCompatibilityIssue(LayerCompatibilityIssue):
 
     npu_placement: str = "unknown"  # 'npu', 'cpu', or 'unknown'
 
-    def to_dict(self) -> dict:
-        """Convert to dictionary with proper serialization."""
-        result = super().to_dict()
-        result["npu_placement"] = self.npu_placement
-        return result
-
 
 @register_fact_type(
     "ethos_u_layer_suboptimal_activation",
@@ -81,12 +75,6 @@ class EthosULayerSuboptimalActivation(LayerCompatibilityIssue):
     """Fact indicating a layer uses suboptimal activation function."""
 
     activation_type: str = "unknown"
-
-    def to_dict(self) -> dict:
-        """Convert to dictionary with proper serialization."""
-        result = super().to_dict()
-        result["activation_type"] = self.activation_type
-        return result
 
 
 @register_fact_type(

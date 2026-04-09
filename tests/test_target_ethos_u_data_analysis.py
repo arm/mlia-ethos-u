@@ -10,7 +10,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from mlia.backend.vela.compat import NpuSupported, Operator, Operators
+from mlia.backend.vela.compat import (
+    NpuSupported,
+    Operator,
+    Operators,
+    VelaCompatibilityResult,
+)
 from mlia.core.common import DataItem
 from mlia.core.data_analysis import Fact
 from mlia.target.ethos_u.common_reporters import (
@@ -28,12 +33,23 @@ from mlia.target.ethos_u.data_analysis import (
     AllOperatorsSupportedOnNPU,
     EthosUDataAnalyzer,
     EthosULayerCompatibilityIssue,
+    EthosULayerSuboptimalActivation,
     EthosULayerHighMemoryPressure,
     EthosULayerHighNetworkShare,
     EthosULayerHighOpCycles,
     EthosULayerLowMacUtil,
     HasCPUOnlyOperators,
     HasUnsupportedOnNPUOperators,
+    PerfMetricDiff,
+    OptimizationResults,
+)
+from mlia.target.ethos_u.config import EthosUConfiguration
+from mlia.target.ethos_u.optimization_shims import OptimizationSettings
+from mlia.target.ethos_u.performance import (
+    MemoryUsage,
+    NPUCycles,
+    OptimizationPerformanceMetrics,
+    PerformanceMetrics,
 )
 from mlia.target.ethos_u.performance import (
     CombinedPerformanceResult,
@@ -153,6 +169,173 @@ def test_ethos_u_data_analyzer(
     assert [_fact_payload(fact) for fact in analyzer.get_analyzed_data()] == [
         _fact_payload(fact) for fact in expected_facts
     ]
+
+
+def test_perf_metric_diff_non_zero_original() -> None:
+    """Test PerfMetricDiff.diff with non-zero original value."""
+
+    diff = PerfMetricDiff(original_value=100, optimized_value=80)
+
+    assert diff.diff == pytest.approx(20.0)
+
+
+def test_perf_metric_diff_zero_original() -> None:
+    """Test PerfMetricDiff.diff when original value is zero."""
+
+    diff = PerfMetricDiff(original_value=0, optimized_value=42)
+
+    assert diff.diff == 0
+
+
+def _make_performance_metrics(
+    memory: MemoryUsage | None, cycles: NPUCycles | None
+) -> PerformanceMetrics:
+    """Create PerformanceMetrics instance for tests."""
+    _TEST_TARGET_CONFIG = MagicMock(spec=EthosUConfiguration)
+    return PerformanceMetrics(
+        target_config=_TEST_TARGET_CONFIG,
+        npu_cycles=cycles,
+        memory_usage=memory,
+        layerwise_perf_info=None,
+    )
+
+
+def test_analyze_optimization_results_no_optimizations() -> None:
+    """Test that no facts are added when there are no optimizations."""
+
+    analyzer = EthosUDataAnalyzer()
+
+    original_metrics = _make_performance_metrics(
+        memory=MemoryUsage(1, 2, 3, 4),
+        cycles=NPUCycles(1, 2, 3, 4, 5, 6),
+    )
+
+    optimization_results = OptimizationPerformanceMetrics(
+        original_perf_metrics=original_metrics,
+        optimizations_perf_metrics=[],
+    )
+
+    analyzer.analyze_data(optimization_results)
+
+    assert analyzer.get_analyzed_data() == []
+
+
+def test_analyze_optimization_results_with_memory_and_cycles() -> None:
+    """Test optimization analysis when both memory and cycles are present."""
+
+    analyzer = EthosUDataAnalyzer()
+
+    original_memory = MemoryUsage(100, 200, 300, 400)
+    original_cycles = NPUCycles(1, 2, 3, 4, 5, 6)
+    original_metrics = _make_performance_metrics(
+        memory=original_memory,
+        cycles=original_cycles,
+    )
+
+    optimized_memory = MemoryUsage(50, 100, 150, 200)
+    optimized_cycles = NPUCycles(1, 2, 2, 4, 5, 6)
+    optimized_metrics = _make_performance_metrics(
+        memory=optimized_memory,
+        cycles=optimized_cycles,
+    )
+
+    opt_settings = [OptimizationSettings("pruning", 0.5, [])]
+
+    optimization_results = OptimizationPerformanceMetrics(
+        original_perf_metrics=original_metrics,
+        optimizations_perf_metrics=[(opt_settings, optimized_metrics)],
+    )
+
+    analyzer.analyze_data(optimization_results)
+
+    facts = analyzer.get_analyzed_data()
+    assert len(facts) == 1
+    assert isinstance(facts[0], OptimizationResults)
+
+    result = facts[0]
+    assert len(result.diffs) == 1
+
+    diff = result.diffs[0]
+    assert diff.opt_type == opt_settings
+
+    expected_keys = {
+        "sram",
+        "dram",
+        "on_chip_flash",
+        "off_chip_flash",
+        "npu_total_cycles",
+    }
+    assert set(diff.opt_diffs.keys()) == expected_keys
+
+    sram_diff = diff.opt_diffs["sram"]
+    assert sram_diff.original_value == original_memory.sram_memory_area_size
+    assert sram_diff.optimized_value == optimized_memory.sram_memory_area_size
+
+    cycles_diff = diff.opt_diffs["npu_total_cycles"]
+    assert cycles_diff.original_value == original_cycles.npu_total_cycles
+    assert cycles_diff.optimized_value == optimized_cycles.npu_total_cycles
+
+
+def _make_npu_supported_operator(name: str, op_type: str) -> Operator:
+    """Helper to create an NPU-supported operator."""
+
+    return Operator(
+        name=name,
+        op_type=op_type,
+        run_on_npu=NpuSupported(True, []),
+    )
+
+
+def test_analyze_activation_function_detects_suboptimal_activation() -> None:
+    """Test that suboptimal activation patterns are detected."""
+
+    analyzer = EthosUDataAnalyzer()
+
+    # First operator does not start a pattern; second starts a MISH pattern.
+    ops = [
+        _make_npu_supported_operator("conv", "CONV_2D"),
+        _make_npu_supported_operator("exp_op", "EXP"),
+        _make_npu_supported_operator("add_op", "ADD"),
+        _make_npu_supported_operator("log_op", "LOG"),
+        _make_npu_supported_operator("tanh_op", "TANH"),
+        _make_npu_supported_operator("mul_op", "MUL"),
+    ]
+
+    vela_result = VelaCompatibilityResult(legacy_info=Operators(ops=ops))
+
+    analyzer.analyze_data(vela_result)
+
+    facts = analyzer.get_analyzed_data()
+    suboptimal_facts = [
+        fact for fact in facts if isinstance(fact, EthosULayerSuboptimalActivation)
+    ]
+
+    assert len(suboptimal_facts) == 1
+    fact = suboptimal_facts[0]
+
+    assert fact.location == "operator/1"
+    assert fact.operator_type == "EXP"
+    assert fact.activation_type == "MISH"
+    assert fact.is_supported is True
+    assert fact.reasons == []
+
+
+def test_analyze_activation_function_no_matching_pattern() -> None:
+    """Test that no facts are added when no pattern matches."""
+
+    analyzer = EthosUDataAnalyzer()
+
+    ops = [
+        _make_npu_supported_operator("conv1", "CONV_2D"),
+        _make_npu_supported_operator("pool1", "MAX_POOL"),
+    ]
+
+    vela_result = VelaCompatibilityResult(legacy_info=Operators(ops=ops))
+
+    analyzer.analyze_data(vela_result)
+
+    facts = analyzer.get_analyzed_data()
+    assert not any(isinstance(fact, EthosULayerSuboptimalActivation) for fact in facts)
 
 
 @pytest.mark.parametrize(
