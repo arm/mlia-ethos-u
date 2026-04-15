@@ -601,3 +601,16 @@ def test_ethos_u_data_analyzer_performance_results(
     ]
     for excluded_fact_type in excluded_fact_types:
         assert not any(isinstance(fact, excluded_fact_type) for fact in facts)
+
+
+def test_ethos_u_data_analyzer_logs_unhandled_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unhandled data items should be routed to debug logging, not printed."""
+    logger = MagicMock()
+    monkeypatch.setattr("mlia.target.ethos_u.data_analysis.logger", logger)
+
+    analyzer = EthosUDataAnalyzer()
+    analyzer.analyze_data(object())  # type: ignore[arg-type]
+
+    logger.debug.assert_called_once()

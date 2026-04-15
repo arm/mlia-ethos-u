@@ -4,14 +4,17 @@
 
 from __future__ import annotations
 
+import inspect
 from unittest.mock import MagicMock
 
 import pytest
 
 import mlia.target.registry
+import mlia.target.ethos_u.plugin
 from mlia.backend.manager import DefaultInstallationManager
 from mlia.core.common import AdviceCategory
 from mlia.target.config import TargetInfo, get_builtin_target_profile_path
+from mlia.target.ethos_u.handlers import EthosUEventHandler
 from mlia.target.registry import (
     all_supported_backends,
     default_backends,
@@ -24,6 +27,11 @@ from mlia.target.registry import (
     table,
 )
 from mlia.utils.registry import Registry
+
+
+def _target_info_supports_event_handler_factory() -> bool:
+    parameters = inspect.signature(TargetInfo.__init__).parameters
+    return "event_handler_factory" in parameters
 
 
 @pytest.mark.parametrize("expected_target", ("ethos-u55", "ethos-u65", "ethos-u85"))
@@ -195,7 +203,7 @@ def test_table_generator(
         test_registry.register(name, info, pretty_name)
 
     monkeypatch.setattr(
-        "mlia.backend.manager.get_installation_manager",
+        "mlia.target.registry.get_installation_manager",
         MagicMock(return_value=DefaultInstallationManager([])),
     )
     monkeypatch.setattr(mlia.target.registry, "registry", test_registry)
@@ -215,3 +223,74 @@ def test_table_generator(
     assert all(
         line in {"NOT INSTALLED", "INSTALLED", "BUILTIN"} for line in status_lines
     )
+
+
+@pytest.mark.skipif(
+    not _target_info_supports_event_handler_factory(),
+    reason="Installed mlia core does not expose event_handler_factory",
+)
+def test_target_registry_api_event_handler_factory() -> None:
+    """Ethos-U targets should register API event handler factories."""
+    for target in ("ethos-u55", "ethos-u65", "ethos-u85"):
+        info = registry.items[target]
+        assert info.event_handler_factory is not None
+        handler = info.event_handler_factory(None)
+        assert isinstance(handler, EthosUEventHandler)
+        assert handler.collect_only is True
+
+
+def test_create_ethos_u_api_event_handler_requires_collect_only_support(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Older mlia cores should fail with a clear upgrade message."""
+
+    class _FakeSignature:
+        parameters = {"self": object(), "formatter_resolver": object()}
+
+    monkeypatch.setattr(
+        mlia.target.ethos_u.plugin.inspect,
+        "signature",
+        lambda _obj: _FakeSignature(),
+    )
+
+    with pytest.raises(RuntimeError, match="Please upgrade mlia"):
+        mlia.target.ethos_u.plugin.create_ethos_u_api_event_handler(None)
+
+
+def test_target_registry_registers_without_event_handler_factory_support(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Older mlia cores should register targets without API event handlers."""
+
+    captured_kwargs: list[dict[str, object]] = []
+
+    class _LegacyTargetInfo:
+        def __init__(
+            self,
+            supported_backends: list[str],
+            default_backends: list[str],
+            advisor_factory_func: object,
+            target_profile_cls: object,
+        ) -> None:
+            captured_kwargs.append(
+                {
+                    "supported_backends": supported_backends,
+                    "default_backends": default_backends,
+                    "advisor_factory_func": advisor_factory_func,
+                    "target_profile_cls": target_profile_cls,
+                }
+            )
+
+    monkeypatch.setattr(
+        mlia.target.ethos_u.plugin,
+        "_target_info_supports_event_handler_factory",
+        lambda: False,
+    )
+    monkeypatch.setattr(mlia.target.ethos_u.plugin, "TargetInfo", _LegacyTargetInfo)
+
+    test_registry: Registry = Registry()
+    mlia.target.ethos_u.plugin.EthosUTargetPlugin.register(test_registry)
+
+    assert tuple(test_registry.items) == ("ethos-u85", "ethos-u65", "ethos-u55")
+    assert len(captured_kwargs) == 3
+    assert all("supported_backends" in kwargs for kwargs in captured_kwargs)

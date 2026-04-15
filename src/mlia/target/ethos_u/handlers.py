@@ -32,18 +32,18 @@ logger = logging.getLogger(__name__)
 class EthosUEventHandler(WorkflowEventsHandler, EthosUAdvisorEventHandler):
     """CLI event handler."""
 
-    def __init__(self, output_dir: Path | None = None) -> None:
+    def __init__(
+        self, output_dir: Path | None = None, *, collect_only: bool = False
+    ) -> None:
         """Init event handler."""
-        super().__init__(ethos_u_formatters)
+        super().__init__(ethos_u_formatters, collect_only=collect_only)
         self.output_dir = output_dir
         self.vela_compatibility_result: VelaCompatibilityResult | None = None
         self.combined_performance_result: CombinedPerformanceResult | None = None
         self.vela_performance_result: VelaPerformanceResult | None = None
         self.corstone_performance_result: CorstonePerformanceResult | None = None
 
-    def on_collected_data(  # pylint: disable=too-many-branches,too-many-statements  # noqa: C901
-        self, event: CollectedDataEvent
-    ) -> None:
+    def on_collected_data(self, event: CollectedDataEvent) -> None:
         """Handle CollectedDataEvent event."""
         data_item = event.data_item
 
@@ -54,7 +54,7 @@ class EthosUEventHandler(WorkflowEventsHandler, EthosUAdvisorEventHandler):
             # Submit wrapper object so JSONReporter can access standardized_output
             self.reporter.submit(data_item, delay_print=True)
 
-        elif isinstance(data_item, Operators):
+        elif isinstance(data_item, Operators) and not self.collect_only:
             self.reporter.submit([data_item.ops, data_item], delay_print=True)
 
         if isinstance(data_item, CombinedPerformanceResult):
@@ -78,10 +78,13 @@ class EthosUEventHandler(WorkflowEventsHandler, EthosUAdvisorEventHandler):
             # Submit wrapper object so JSONReporter can access standardized_output
             self.reporter.submit(data_item, delay_print=True, space=True)
 
-        elif isinstance(data_item, PerformanceMetrics):
+        elif isinstance(data_item, PerformanceMetrics) and not self.collect_only:
             self.reporter.submit(data_item, delay_print=True, space=True)
 
-        if isinstance(data_item, OptimizationPerformanceMetrics):
+        if (
+            isinstance(data_item, OptimizationPerformanceMetrics)
+            and not self.collect_only
+        ):
             original_metrics = data_item.original_perf_metrics
             if not data_item.optimizations_perf_metrics:
                 return
@@ -96,11 +99,17 @@ class EthosUEventHandler(WorkflowEventsHandler, EthosUAdvisorEventHandler):
                 space=True,
             )
 
-        if isinstance(data_item, TFLiteCompatibilityInfo) and not data_item.compatible:
+        if (
+            not self.collect_only
+            and isinstance(data_item, TFLiteCompatibilityInfo)
+            and not data_item.compatible
+        ):
             self.reporter.submit(data_item, delay_print=True)
 
     def on_ethos_u_advisor_started(self, event: EthosUAdvisorStartedEvent) -> None:
         """Handle EthosUAdvisorStarted event."""
+        if self.collect_only:
+            return
         self.reporter.submit(event.target_config)
 
     def on_advice_stage_finished(self, event: AdviceStageFinishedEvent) -> None:
@@ -110,6 +119,9 @@ class EthosUEventHandler(WorkflowEventsHandler, EthosUAdvisorEventHandler):
         """
         # Call parent implementation first
         super().on_advice_stage_finished(event)
+
+        if self.collect_only:
+            return
 
         if self.output_dir:
             # Convert advice to schema objects
@@ -170,5 +182,5 @@ class EthosUEventHandler(WorkflowEventsHandler, EthosUAdvisorEventHandler):
             with open(output_path, "w", encoding="utf-8") as file_handle:
                 json.dump(output, file_handle, indent=2)
             logger.info("Saved output with advice to %s", output_path)
-        except Exception as exc:  # pylint: disable=broad-exception-caught
+        except Exception as exc:
             logger.warning("Failed to save output to %s: %s", filename, exc)
