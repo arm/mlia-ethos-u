@@ -55,6 +55,10 @@ Build the package:
 uv build
 ```
 
+## Documentation
+
+- `docs/source/ethos_u_api_walkthrough.ipynb`: walkthrough of the Ethos-U Python API integration for path-based inputs.
+
 ## Project Layout
 
 - `src/mlia/target/ethos_u/`: Ethos-U target integration and advisor logic.

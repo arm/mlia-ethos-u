@@ -39,7 +39,7 @@ class CopyrightHeaderChecker:
                 continue
 
             # For JSON files or specific build files, check for sidecar .license file
-            if filename.endswith(".json") or filename in BUILD_FILES:
+            if filename.endswith((".json", ".ipynb")) or filename in BUILD_FILES:
                 license_file = filename + ".license"
                 if os.path.exists(license_file):
                     filename = license_file
