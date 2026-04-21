@@ -61,6 +61,68 @@ def test_advisor_metadata() -> None:
     assert EthosUInferenceAdvisor.name() == "ethos_u_inference_advisor"
 
 
+def test_get_collectors_uses_overridden_performance_collector(
+    tmp_path: Path,
+    test_tflite_model: Path,
+) -> None:
+    """Performance collection should honor a subclass collector override."""
+
+    class CustomPerformanceCollector(EthosUPerformance):
+        """Test collector override."""
+
+    class CustomAdvisor(EthosUInferenceAdvisor):
+        """Advisor subclass using a custom performance collector."""
+
+        performance_collector_cls = CustomPerformanceCollector
+
+    ctx = ExecutionContext(
+        output_dir=tmp_path,
+        advice_category={AdviceCategory.PERFORMANCE},
+        config_parameters={
+            "ethos_u_inference_advisor": {
+                "model": str(test_tflite_model),
+                "target_profile": "ethos-u55-256",
+                "backends": ["vela"],
+            }
+        },
+    )
+
+    collectors = CustomAdvisor().get_collectors(ctx)
+
+    assert [type(collector) for collector in collectors] == [CustomPerformanceCollector]
+
+
+def test_get_collectors_uses_overridden_performance_collector_for_non_tflite(
+    tmp_path: Path,
+    test_keras_model: Path,
+) -> None:
+    """Non-TFLite performance collection should honor a subclass override."""
+
+    class CustomPerformanceCollector(EthosUPerformance):
+        """Test collector override."""
+
+    class CustomAdvisor(EthosUInferenceAdvisor):
+        """Advisor subclass using a custom performance collector."""
+
+        performance_collector_cls = CustomPerformanceCollector
+
+    ctx = ExecutionContext(
+        output_dir=tmp_path,
+        advice_category={AdviceCategory.PERFORMANCE},
+        config_parameters={
+            "ethos_u_inference_advisor": {
+                "model": str(test_keras_model),
+                "target_profile": "ethos-u55-256",
+                "backends": ["vela"],
+            }
+        },
+    )
+
+    collectors = CustomAdvisor().get_collectors(ctx)
+
+    assert [type(collector) for collector in collectors] == [CustomPerformanceCollector]
+
+
 @pytest.mark.parametrize(
     "categories, model_fixture, optimization_targets, expected_collectors",
     [

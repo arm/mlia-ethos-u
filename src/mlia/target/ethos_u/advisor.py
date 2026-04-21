@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 from mlia.core.advice_generation import AdviceProducer
 from mlia.core.advisor import DefaultInferenceAdvisor, InferenceAdvisor
@@ -63,6 +63,9 @@ def _add_common_optimization_params(advisor_parameters: dict, extra_args: dict) 
 class EthosUInferenceAdvisor(DefaultInferenceAdvisor):
     """Ethos-U Inference Advisor."""
 
+    # Allow target-specific subclasses to swap in a specialized collector.
+    performance_collector_cls: ClassVar[type[EthosUPerformance]] = EthosUPerformance
+
     @classmethod
     def name(cls) -> str:
         """Return name of the advisor."""
@@ -103,7 +106,9 @@ class EthosUInferenceAdvisor(DefaultInferenceAdvisor):
                     EthosUOptimizationPerformance(model, target_config, backends)
                 )
             if context.category_enabled(AdviceCategory.PERFORMANCE):
-                collectors.append(EthosUPerformance(model, target_config, backends))
+                collectors.append(
+                    self.performance_collector_cls(model, target_config, backends)
+                )
         else:
             # Keras/SavedModel: Prefer optimization
             if context.category_enabled(AdviceCategory.OPTIMIZATION):
@@ -116,7 +121,9 @@ class EthosUInferenceAdvisor(DefaultInferenceAdvisor):
                     EthosUOptimizationPerformance(model, target_config, backends)
                 )
             elif context.category_enabled(AdviceCategory.PERFORMANCE):
-                collectors.append(EthosUPerformance(model, target_config, backends))
+                collectors.append(
+                    self.performance_collector_cls(model, target_config, backends)
+                )
 
         return collectors
 
