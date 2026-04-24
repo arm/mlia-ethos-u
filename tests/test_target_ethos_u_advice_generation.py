@@ -270,10 +270,7 @@ def assert_advices_match(actual: list[Advice], expected: list[Advice]) -> None:
                         "SRAM used (KB) have degraded by 50.00% You can "
                         "try to push the optimization target higher "
                         "(e.g. pruning: 0.6) to check if those results "
-                        "can be further improved. For more info: mlia "
-                        "optimize --help Optimization command: mlia "
-                        "optimize sample_model.h5 --pruning "
-                        "--pruning-target 0.6"
+                        "can be further improved."
                     ),
                 ),
                 Advice(  # Line 170 context
@@ -515,15 +512,6 @@ def test_ethosu_advice_producer(
                         "operators that are supported by the NPU."
                     ),
                 ),
-                Advice(
-                    id="1",
-                    category=SchemaAdviceCategory.PERFORMANCE,
-                    severity=AdviceSeverity.INFO,
-                    message=(
-                        "Check if you can improve the performance by "
-                        "applying tooling techniques to your model."
-                    ),
-                ),
             ],
             id="static_perf_api",
         ),
@@ -543,19 +531,6 @@ def test_ethosu_advice_producer(
                         "running the following command to verify that: "
                         "mlia check test_model.h5 --target-profile "
                         "sample_target"
-                    ),
-                ),
-                Advice(
-                    id="1",
-                    category=SchemaAdviceCategory.PERFORMANCE,
-                    severity=AdviceSeverity.INFO,
-                    message=(
-                        "Check if you can improve the performance by "
-                        "applying tooling techniques to your model. Note: "
-                        "you will need a Keras model for that. For example: "
-                        "mlia optimize test_model.h5 --pruning --clustering "
-                        "--pruning-target 0.5 --clustering-target 32 For more "
-                        "info: mlia optimize --help"
                     ),
                 ),
             ],

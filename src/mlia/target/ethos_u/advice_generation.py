@@ -163,11 +163,6 @@ class EthosUAdviceProducer(FactBasedAdviceProducer):
                     f"(e.g. {next_optimization_target_as_str}) "
                     "to check if those results can be further improved."
                 )
-                additional_actions = self.context.action_resolver.apply_optimizations(
-                    opt_settings=next_optimization_target
-                )
-                if additional_actions:
-                    message += " " + " ".join(additional_actions)
 
         elif degraded:
             message += (
@@ -375,23 +370,6 @@ class EthosUStaticAdviceProducer(ContextAwareAdviceProducer):
                                 self.context.action_resolver.check_operator_compatibility()  # noqa: E501
                             )
                             if self.context.action_resolver.check_operator_compatibility()  # noqa: E501
-                            else ""
-                        )
-                    ),
-                ),
-                Advice(
-                    id="static_perf_2",
-                    category=SchemaAdviceCategory.PERFORMANCE,
-                    severity=AdviceSeverity.INFO,
-                    message=(
-                        "Check if you can improve the performance by applying "
-                        "tooling techniques to your model."
-                        + (
-                            " "
-                            + " ".join(
-                                self.context.action_resolver.apply_optimizations()
-                            )
-                            if self.context.action_resolver.apply_optimizations()
                             else ""
                         )
                     ),
