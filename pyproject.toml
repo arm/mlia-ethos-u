@@ -12,7 +12,7 @@ dependencies = [
 ]
 keywords = ["ml", "arm", "ethos", "tflite"]
 authors = [{name = "Arm Ltd", email = "mlia@arm.com"}]
-license = {file = "LICENSES/Apache-2.0.txt"}
+license = "Apache-2.0"
 license-files = ["LICENSES/*.txt"]
 classifiers = [
     "Development Status :: 4 - Beta",
