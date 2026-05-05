@@ -116,12 +116,36 @@ jobs:
               -o junit_log_passing_tests=true \
               --no-cov \
               --junitxml="report/report-${{ matrix.index }}.xml"
+      - name: Run API e2e pytest
+        if: ${{ matrix.index == 0 }}
+        env:
+          MLIA_E2E_ARTIFACTS: ${{ env.ARTIFACTS_PATH }}
+          MLIA_E2E_BACKENDS: ${{ vars.MLIA_E2E_BACKENDS }}
+        run: |
+          set -o pipefail
+          uv run --no-sync \
+            --with dist/*.whl \
+            -- pytest -v tests/test_e2e_api.py \
+              -x \
+              -s \
+              --capture=tee-sys \
+              -o junit_logging=out-err \
+              -o junit_log_passing_tests=true \
+              --no-cov \
+              --junitxml="report/api-report-${{ matrix.index }}.xml"
       - name: Upload e2e junit
-        if: ${{ always() && hashFiles(format('report/report-{0}.xml', matrix.index)) != '' }}
+        if: >-
+          ${{
+            always() &&
+            (
+              hashFiles(format('report/report-{0}.xml', matrix.index)) != '' ||
+              hashFiles(format('report/api-report-{0}.xml', matrix.index)) != ''
+            )
+          }}
         uses: actions/upload-artifact@v4
         with:
           name: e2e-junit-shard-${{ matrix.index }}
-          path: report/report-${{ matrix.index }}.xml
+          path: report/*.xml
 
   combine_e2e_pdf:
     name: Combine E2E PDF Reports

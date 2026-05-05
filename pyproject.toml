@@ -8,7 +8,7 @@ description = "ML Inference Advisor Ethos Plugin"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "mlia>=0.11.0.dev6"
+    "mlia>=0.11.0.dev16"
 ]
 keywords = ["ml", "arm", "ethos", "tflite"]
 authors = [{name = "Arm Ltd", email = "mlia@arm.com"}]
@@ -76,12 +76,15 @@ schema = "<type>(<scope>): <Subject-capitalized>\n<BLANK LINE>\n<body>\n<BLANK L
 commit_parser = "^((?P<change_type>build|ci|docs|feat|fix|perf|refactor|style|test|BREAKING CHANGE)(?:\\((?P<scope>[^()\\r\\n]*)\\)|\\()?(?P<breaking>!)?|\\w+!):\\s(?P<message>.*)?"
 change_type_map = {"feat" = "Feature changes", "fix" = "Bug fix", "perf" = "Performance improvements", "build" = "Development changes"}
 
-[tool.pytest]
+[tool.pytest.ini_options]
 addopts = [
     "--cov=mlia",
     "--cov-report=term-missing",
     "--cov-report=xml:coverage.xml",
     "--cov-fail-under=65"
+]
+markers = [
+    "slow: marks tests that require heavyweight runtime dependencies or backend artifacts"
 ]
 
 [dependency-groups]
