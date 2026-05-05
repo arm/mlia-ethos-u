@@ -20,8 +20,30 @@ from mlia.backend.errors import BackendExecutionFailed
 from mlia.backend.repo import get_backend_repository
 from mlia.utils.filesystem import get_mlia_resource_dirs, get_mlia_resources, sha256
 from mlia.utils.proc import Command, OutputLogger, process_command_output
+from mlia.target.ethos_u.utils.model_format import is_pte_file
 
 logger = logging.getLogger(__name__)
+
+
+_FVP_VERSION_BY_BACKEND = {
+    "corstone-300": "300",
+    "corstone-310": "310",
+    "corstone-320": "320",
+}
+
+_TARGET_BY_NAME = {
+    "ethos-u55": "U55",
+    "ethos-u65": "U65",
+    "ethos-u85": "U85",
+}
+
+_APPLICATION_VERSION = "26.03.0"
+_APPLICATION_BINARY = "mlek_inference_runner.axf"
+
+_SUPPORTED_EXECUTORCH_APPLICATIONS = {
+    ("corstone-300", "ethos-u55"),
+    ("corstone-320", "ethos-u85"),
+}
 
 
 # A superset of stats from all corstone versions
@@ -132,12 +154,12 @@ class CorstonePerformanceMetrics:
 
     @classmethod
     def from_fvp_out(
-        cls, target: str, metrics: dict[str, Any], per_layer_file: Path
+        cls, target: str, metrics: dict[str, Any], per_layer_file: Path | None = None
     ) -> CorstonePerformanceMetrics:
         """Create CorstoneModelPerformanceMetrics from FVP output."""
         return cls(
             CorstoneModelPerformanceMetrics.from_fvp_metrics(target, metrics),
-            _parse_per_layer_csv(per_layer_file),
+            _parse_per_layer_csv(per_layer_file) if per_layer_file else [],
         )
 
     def to_standardized_output(  # pylint: disable=too-many-locals
@@ -174,11 +196,10 @@ class CorstonePerformanceMetrics:
         tool = schema.Tool(name="mlia", version=mlia.__version__)
 
         # Create backend
+        backend_label = backend_name.replace("-", " ").title()
         backend = schema.Backend(
             id=backend_name,
-            name=f"Corstone {backend_name.split('-')[1]}"
-            if "-" in backend_name
-            else backend_name,
+            name=backend_label,
             version="unknown",  # Corstone version comes from FVP executable
             configuration=backend_config or {},
         )
@@ -340,8 +361,11 @@ class GenericInferenceOutputParser:
         """Parse the collected data and return perf metrics."""
         try:
             parsed_metrics = self._parse_data()
+            per_layer_file = next(output_dir.glob("*_per-layer.csv"), None)
             return CorstonePerformanceMetrics.from_fvp_out(
-                target, parsed_metrics, list(output_dir.glob("*_per-layer.csv"))[0]
+                target,
+                parsed_metrics,
+                per_layer_file,
             )
         except Exception as err:
             raise ValueError("Unable to parse output and get metrics.") from err
@@ -374,20 +398,35 @@ class FVPMetadata:
     generic_inf_app: Path
 
 
-def get_generic_inference_app_path(fvp: str, target: str) -> Path:
+def get_generic_inference_app_path(fvp: str, target: str, is_pte: bool) -> Path:
     """Return path to the generic inference runner binary."""
-    fvp_mapping = {"corstone-300": "300", "corstone-310": "310", "corstone-320": "320"}
-    target_mapping = {"ethos-u55": "U55", "ethos-u65": "U65", "ethos-u85": "U85"}
+    try:
+        fvp_version = _FVP_VERSION_BY_BACKEND[fvp]
+        target_name = _TARGET_BY_NAME[target]
+    except KeyError as err:
+        raise ValueError(
+            f"No inference runner is available for backend '{fvp}' and target "
+            f"'{target}'."
+        ) from err
 
-    fvp_version = f"sse-{fvp_mapping[fvp]}"
-    app_version = f"22.08.02-ethos-{target_mapping[target]}-Default-noTA"
+    runtime_tag = "tflm"
+    if is_pte:
+        if (fvp, target) not in _SUPPORTED_EXECUTORCH_APPLICATIONS:
+            raise ValueError(
+                f"No inference runner is available for backend '{fvp}' and target "
+                f"'{target}'."
+            )
+        runtime_tag = "executorch"
 
-    app_dir = f"inference_runner-{fvp_version}-{app_version}"
+    app_dir = (
+        f"inference_runner-sse-{fvp_version}-"
+        f"{_APPLICATION_VERSION}-{runtime_tag}-ethos-{target_name}-Default-noTA"
+    )
     relative_app_path = Path(
         "backends",
         "applications",
         app_dir,
-        "ethos-u-inference_runner.axf",
+        _APPLICATION_BINARY,
     )
 
     for resources_dir in get_mlia_resource_dirs():
@@ -416,11 +455,11 @@ def get_executable_name(fvp: str, profile: str, target: str) -> str:
     return executable_name_mapping[(fvp, profile, target)]
 
 
-def get_fvp_metadata(fvp: str, profile: str, target: str) -> FVPMetadata:
+def get_fvp_metadata(fvp: str, profile: str, target: str, is_pte: bool) -> FVPMetadata:
     """Return metadata for selected Corstone backend."""
     executable_name = get_executable_name(fvp, profile, target)
 
-    app = get_generic_inference_app_path(fvp, target)
+    app = get_generic_inference_app_path(fvp, target, is_pte)
 
     return FVPMetadata(executable_name, app)
 
@@ -435,12 +474,13 @@ class CorstoneRunConfig:
     target: str
     mac: int
     model: Path
+    is_pte: bool
     profile: str = "default"
 
 
 def build_corstone_command(cfg: CorstoneRunConfig) -> Command:
     """Build command to run Corstone FVP."""
-    fvp_metadata = get_fvp_metadata(cfg.fvp, cfg.profile, cfg.target)
+    fvp_metadata = get_fvp_metadata(cfg.fvp, cfg.profile, cfg.target, cfg.is_pte)
 
     if cfg.fvp == "corstone-320":
         cmd = [
@@ -525,6 +565,7 @@ def estimate_performance(
         target=target,
         mac=mac,
         model=model,
+        is_pte=is_pte_file(model),
         profile=settings["profile"],
     )
     return get_metrics(cfg)

@@ -444,10 +444,10 @@ def test_performance_collector_pytorch_model(
     assert isinstance(result, PerformanceMetrics)
 
 
-def test_performance_collector_pytorch_requires_vela_backend(
+def test_performance_collector_pytorch_with_corstone_backend(
     monkeypatch: pytest.MonkeyPatch, sample_context: Context, tmp_path: Path
 ) -> None:
-    """Test PyTorch performance requires Vela backend only."""
+    """Test PyTorch performance can be requested on Corstone directly."""
     target = EthosUConfiguration.load_profile("ethos-u55-256")
 
     pytorch_model = tmp_path / "model.pt2"
@@ -466,13 +466,39 @@ def test_performance_collector_pytorch_requires_vela_backend(
         MagicMock(return_value=False),
     )
 
-    mock_performance_estimation(monkeypatch, target)
+    metrics = PerformanceMetrics(
+        target,
+        NPUCycles(1, 2, 3, 4, 5, 6),
+        MemoryUsage(1, 2, 3, 4),
+        LayerwisePerfInfo(layerwise_info=[]),
+    )
+    captured_backends: list[str] | None = None
+
+    class MockEstimator:
+        def __init__(
+            self,
+            context: Context,
+            target_config: EthosUConfiguration,
+            backends: list[str],
+        ) -> None:
+            nonlocal captured_backends
+            captured_backends = backends
+
+        def estimate(self, model: Path) -> PerformanceMetrics:
+            return metrics
+
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.data_collection.EthosUPerformanceEstimator",
+        MockEstimator,
+    )
 
     collector = EthosUPerformance(pytorch_model, target, backends=["corstone-300"])
     collector.set_context(sample_context)
 
-    with pytest.raises(ConfigurationError, match="Vela backend"):
-        collector.collect_data()
+    result = collector.collect_data()
+
+    assert isinstance(result, PerformanceMetrics)
+    assert captured_backends == ["corstone-300"]
 
 
 def test_performance_collector_tosa_model(

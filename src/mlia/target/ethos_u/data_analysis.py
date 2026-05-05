@@ -374,10 +374,11 @@ class EthosUDataAnalyzer(FactExtractor):
             )
             return
         corstone_result = 0
-        breakdowns = standard_out["results"][corstone_result]["breakdowns"]
-        self.analyze_network_share(breakdowns)
-        self.analyze_memory_pressure(breakdowns)
-        self.analyze_mac_util(breakdowns)
+        breakdowns = standard_out["results"][corstone_result].get("breakdowns", None)
+        if breakdowns:
+            self.analyze_network_share(breakdowns)
+            self.analyze_memory_pressure(breakdowns)
+            self.analyze_mac_util(breakdowns)
 
     @analyze_data.register
     def analyze_vela_performance_result(self, data_item: VelaPerformanceResult) -> None:

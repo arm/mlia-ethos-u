@@ -32,6 +32,7 @@ from mlia.target.ethos_u.performance import (
     merge_performance_outputs,
 )
 from mlia.target.ethos_u.utils.model_format import (
+    is_pte_file,
     is_pytorch_file,
     is_tflite_model,
     is_tosa_file,
@@ -39,6 +40,21 @@ from mlia.target.ethos_u.utils.model_format import (
 from mlia.utils.logging import log_action
 
 logger = logging.getLogger(__name__)
+
+
+def _default_pte_backend_for_target(target: str) -> str:
+    """Return the default Corstone backend for ExecuTorch performance."""
+    default_backend_by_target = {
+        "ethos-u55": "corstone-300",
+        "ethos-u85": "corstone-320",
+    }
+
+    try:
+        return default_backend_by_target[target]
+    except KeyError as err:
+        raise ConfigurationError(
+            f"ExecuTorch .pte performance is not supported for target '{target}'."
+        ) from err
 
 
 class EthosUOperatorCompatibility(ContextAwareDataCollector):
@@ -51,6 +67,10 @@ class EthosUOperatorCompatibility(ContextAwareDataCollector):
 
     def collect_data(self) -> VelaCompatibilityResult | TFLiteCompatibilityInfo | None:
         """Collect operator compatibility information."""
+        if is_pte_file(self.model):
+            raise ConfigurationError(
+                "Operator compatibility is not supported for ExecuTorch .pte files."
+            )
         if is_pytorch_file(self.model) or is_tosa_file(self.model):
             model_path = self.model
         else:
@@ -145,20 +165,28 @@ class EthosUPerformance(ContextAwareDataCollector):
                 is_tflite_model(self.model),
                 is_tosa_file(self.model),
                 is_pytorch_file(self.model),
+                is_pte_file(self.model),
             ]
         ):
             raise ConfigurationError(
-                "Input must be a TFLite, TOSA or PyTorch .pt2 file."
+                "Input must be a TFLite, TOSA, ExecuTorch .pte or PyTorch .pt2 file."
             )
 
         model_to_estimate: Path | Any
-        if is_pytorch_file(self.model):
+        if is_pte_file(self.model):
+            if self.backends is None:
+                self.backends = [
+                    _default_pte_backend_for_target(self.target_config.target)
+                ]
+            if any(not is_corstone_backend(backend) for backend in self.backends):
+                raise ConfigurationError(
+                    "ExecuTorch .pte performance is only supported with "
+                    "Corstone backends."
+                )
+            model_to_estimate = self.model
+        elif is_pytorch_file(self.model):
             if self.backends is None:
                 self.backends = ["vela"]
-            elif any(backend != "vela" for backend in self.backends):
-                raise ConfigurationError(
-                    "PyTorch .pt2 performance is only supported with the Vela backend."
-                )
             model_to_estimate = self.model
         elif is_tosa_file(self.model):
             model_to_estimate = self.model

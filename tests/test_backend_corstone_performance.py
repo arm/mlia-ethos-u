@@ -138,6 +138,7 @@ class BuildCmdCase:
     target: str
     mac: int
     model: Path
+    is_pte: bool
     profile: str
     expected_command: Command
 
@@ -151,14 +152,15 @@ class BuildCmdCase:
             target="ethos-u55",
             mac=256,
             model=Path("model.tflite"),
+            is_pte=False,
             profile="default",
             expected_command=Command(
                 [
                     "backend_path/FVP_Corstone_SSE-300_Ethos-U55",
                     "-a",
                     "apps/backends/applications/"
-                    "inference_runner-sse-300-22.08.02-ethos-U55-Default-noTA/"
-                    "ethos-u-inference_runner.axf",
+                    "inference_runner-sse-300-26.03.0-tflm-ethos-U55-Default-noTA/"
+                    "mlek_inference_runner.axf",
                     "--data",
                     "model.tflite@0x90000000",
                     "-C",
@@ -181,14 +183,15 @@ class BuildCmdCase:
             target="ethos-u85",
             mac=1024,
             model=Path("model.tflite"),
+            is_pte=False,
             profile="default",
             expected_command=Command(
                 [
                     "backend_path/FVP_Corstone_SSE-320",
                     "-a",
                     "apps/backends/applications/"
-                    "inference_runner-sse-320-22.08.02-ethos-U85-Default-noTA/"
-                    "ethos-u-inference_runner.axf",
+                    "inference_runner-sse-320-26.03.0-tflm-ethos-U85-Default-noTA/"
+                    "mlek_inference_runner.axf",
                     "--data",
                     "model.tflite@0x90000000",
                     "-C",
@@ -205,6 +208,37 @@ class BuildCmdCase:
                     "vis_hdlcd.disable_visualisation=1",
                     "--stat",
                 ],
+            ),
+        ),
+        BuildCmdCase(
+            backend_path=Path("backend_path"),
+            fvp="corstone-300",
+            target="ethos-u55",
+            mac=256,
+            model=Path("model.pte"),
+            is_pte=True,
+            profile="default",
+            expected_command=Command(
+                [
+                    "backend_path/FVP_Corstone_SSE-300_Ethos-U55",
+                    "-a",
+                    "apps/backends/applications/"
+                    "inference_runner-sse-300-26.03.0-executorch-ethos-U55-Default-noTA/"
+                    "mlek_inference_runner.axf",
+                    "--data",
+                    "model.pte@0x90000000",
+                    "-C",
+                    "ethosu.num_macs=256",
+                    "-C",
+                    "mps3_board.telnetterminal0.start_telnet=0",
+                    "-C",
+                    "mps3_board.uart0.out_file='-'",
+                    "-C",
+                    "mps3_board.uart0.shutdown_on_eot=1",
+                    "-C",
+                    "mps3_board.visualisation.disable-visualisation=1",
+                    "--stat",
+                ]
             ),
         ),
     ],
@@ -230,6 +264,7 @@ def test_build_corsone_command(
             case.target,
             case.mac,
             case.model,
+            case.is_pte,
             case.profile,
         )
     )
@@ -246,8 +281,8 @@ def test_get_generic_inference_app_path(
         second_resources_dir
         / "backends"
         / "applications"
-        / "inference_runner-sse-300-22.08.02-ethos-U55-Default-noTA"
-        / "ethos-u-inference_runner.axf"
+        / "inference_runner-sse-300-26.03.0-tflm-ethos-U55-Default-noTA"
+        / "mlek_inference_runner.axf"
     )
     app_path.parent.mkdir(parents=True)
     app_path.write_text("fake axf", encoding="utf-8")
@@ -261,7 +296,9 @@ def test_get_generic_inference_app_path(
         lambda: tmp_path / "fallback",
     )
 
-    assert get_generic_inference_app_path("corstone-300", "ethos-u55") == app_path
+    assert (
+        get_generic_inference_app_path("corstone-300", "ethos-u55", False) == app_path
+    )
 
 
 def test_get_metrics_wrong_fvp(tmp_path: Path) -> None:
@@ -277,6 +314,8 @@ def test_get_metrics_wrong_fvp(tmp_path: Path) -> None:
                 "ethos-u55",
                 256,
                 Path("model.tflite"),
+                False,
+                "default",
             )
         )
 

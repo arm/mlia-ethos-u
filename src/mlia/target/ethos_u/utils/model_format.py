@@ -20,6 +20,11 @@ def is_tflite_model(path: str | Path) -> bool:
     return Path(path).suffix.lower() == ".tflite"
 
 
+def is_pte_file(path: str | Path) -> bool:
+    """Check whether model is an ExecuTorch program file."""
+    return Path(path).suffix.lower() == ".pte"
+
+
 def is_supported_pytorch_extension(path: str | Path) -> bool:
     """Check whether model is a PyTorch exported program (.pt2)."""
     return Path(path).suffix.lower() in _SUPPORTED_PYTORCH_EXTENSIONS

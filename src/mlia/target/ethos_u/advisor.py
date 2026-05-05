@@ -14,6 +14,7 @@ from mlia.core.common import AdviceCategory
 from mlia.core.context import Context, ExecutionContext
 from mlia.core.data_analysis import DataAnalyzer, PatternAnalyzer
 from mlia.core.data_collection import DataCollector
+from mlia.core.errors import ConfigurationError
 from mlia.core.events import Event
 from mlia.target.ethos_u.advice_generation import (
     EthosUAdviceProducer,
@@ -32,7 +33,7 @@ from mlia.target.ethos_u.utils.legacy_shims import (
     LEGACY_OPTIMIZATION_AVAILABLE,
     add_common_optimization_params,
 )
-from mlia.target.ethos_u.utils.model_format import is_tflite_model
+from mlia.target.ethos_u.utils.model_format import is_pte_file, is_tflite_model
 from mlia.target.ethos_u.pattern_analysis import (
     ActivationFunctionPatternAnalyzer,
     LayerHotSpotPatternAnalyzer,
@@ -75,10 +76,22 @@ class EthosUInferenceAdvisor(DefaultInferenceAdvisor):
         """Return list of the data collectors."""
         model = self.get_model(context)
         target_config = self._get_target_config(context)
-        target_config.compiler_options.output_dir = context.output_dir  # type: ignore
+        if target_config.compiler_options is not None:
+            target_config.compiler_options.output_dir = context.output_dir
         backends = self._get_backends(context)
 
         collectors: list[DataCollector] = []
+
+        if is_pte_file(model):
+            if context.category_enabled(
+                AdviceCategory.COMPATIBILITY
+            ) or context.category_enabled(AdviceCategory.OPTIMIZATION):
+                raise ConfigurationError(
+                    "ExecuTorch .pte files currently support performance advice only."
+                )
+            if context.category_enabled(AdviceCategory.PERFORMANCE):
+                collectors.append(EthosUPerformance(model, target_config, backends))
+            return collectors
 
         if context.category_enabled(AdviceCategory.COMPATIBILITY):
             collectors.append(EthosUOperatorCompatibility(model, target_config))
@@ -157,7 +170,8 @@ class EthosUInferenceAdvisor(DefaultInferenceAdvisor):
         """Get target configuration."""
         target_profile = self.get_target_profile(context)
         target_config = cast(EthosUConfiguration, profile(target_profile))
-        target_config.compiler_options.output_dir = context.output_dir  # type: ignore
+        if target_config.compiler_options is not None:
+            target_config.compiler_options.output_dir = context.output_dir
         return target_config
 
     def _get_optimization_settings(self, context: Context) -> list[list[dict]]:

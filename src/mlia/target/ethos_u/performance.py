@@ -22,6 +22,8 @@ from mlia.backend.vela.performance import LayerwisePerfInfo
 from mlia.core.context import Context, ExecutionContext
 from mlia.core.errors import ConfigurationError
 from mlia.core.performance import PerformanceEstimator
+from mlia.plugins.converter_registry import ConverterRegistry
+from mlia.plugins.plugins import load_converter_plugins
 from mlia.target.ethos_u.optimization_shims import OptimizationSettings
 from mlia.target.ethos_u.utils.tflite_shims import (
     ModelConfiguration,
@@ -30,6 +32,7 @@ from mlia.target.ethos_u.utils.tflite_shims import (
 from mlia.target.ethos_u.config import EthosUConfiguration
 from mlia.target.registry import supported_backends
 from mlia.target.ethos_u.utils.model_format import (
+    is_pte_file,
     is_pytorch_file,
     is_tflite_model,
     is_tosa_file,
@@ -37,6 +40,21 @@ from mlia.target.ethos_u.utils.model_format import (
 from mlia.utils.logging import log_action
 
 logger = logging.getLogger(__name__)
+
+
+def _get_converter(name: str) -> Any:
+    """Load a converter plugin by name."""
+    registry = ConverterRegistry()
+    load_converter_plugins(registry)
+    converter = registry.get(name)
+    if converter is None:
+        if name == "pt2_to_pte":
+            raise ConfigurationError(
+                "PyTorch to PTE conversion requires the "
+                "'mlia-converters-pytorch' plugin to be installed."
+            )
+        raise ConfigurationError(f"Converter '{name}' is not available.")
+    return converter
 
 
 @dataclass
@@ -267,6 +285,42 @@ class CorstonePerformanceEstimator(
         self.backend = backend
         self.backend_metrics: CorstonePerformanceMetrics | None = None
 
+    def _build_executorch_target_config(self) -> dict[str, Any]:
+        """Build converter settings for ExecuTorch export."""
+        compiler_options = self.target_config.compiler_options
+        if compiler_options is None:
+            raise ConfigurationError("Vela compiler options are unavailable.")
+
+        return {
+            "target": self.target_config.target,
+            "mac": self.target_config.mac,
+            "system_config": compiler_options.system_config,
+            "memory_mode": compiler_options.memory_mode,
+        }
+
+    def _prepare_executorch_model(self, model_path: Path) -> Path:
+        """Prepare an ExecuTorch-compatible model artifact."""
+        if is_pte_file(model_path):
+            return model_path
+        if not is_pytorch_file(model_path):
+            raise ConfigurationError(
+                "Corstone ExecuTorch execution supports only .pte inputs or "
+                "PyTorch .pt2 files that can be converted to .pte."
+            )
+
+        converter = _get_converter("pt2_to_pte")
+        executorch_target_config = self._build_executorch_target_config()
+        try:
+            return converter(
+                model_path,
+                self.context.output_dir,
+                executorch_target_config,
+            )
+        except Exception as err:
+            raise ConfigurationError(
+                f"Unable to convert PyTorch model {model_path} to .pte."
+            ) from err
+
     def estimate(self, model: Path | ModelConfiguration) -> NPUCycles:
         """Estimate performance."""
         with log_action(f"Getting the performance metrics for '{self.backend}' ..."):
@@ -281,17 +335,22 @@ class CorstonePerformanceEstimator(
                 else model
             )
 
-            if self.target_config.compiler_options is None:
-                raise BackendUnavailableError("Backend vela is not available", "vela")
+            if is_pte_file(model_path) or is_pytorch_file(model_path):
+                prepared_model_path = self._prepare_executorch_model(model_path)
+            else:
+                if self.target_config.compiler_options is None:
+                    raise BackendUnavailableError(
+                        "Backend vela is not available", "vela"
+                    )
 
-            optimized_model_path = vela_comp.compile_model(
-                model_path, self.target_config.compiler_options
-            )
+                prepared_model_path = vela_comp.compile_model(
+                    model_path, self.target_config.compiler_options
+                )
 
             corstone_perf_metrics = estimate_performance(
                 self.target_config.target,
                 self.target_config.mac,
-                optimized_model_path,
+                prepared_model_path,
                 self.backend,
                 self.context.output_dir,
             )
@@ -349,14 +408,19 @@ class EthosUPerformanceEstimator(
                 is_tflite_model(model_path),
                 is_tosa_file(model_path),
                 is_pytorch_file(model_path),
+                is_pte_file(model_path),
             ]
         ):
             raise ConfigurationError(
-                "Input must be a TFLite, TOSA or PyTorch .pt2 file."
+                "Input must be a TFLite, TOSA, ExecuTorch .pte or PyTorch .pt2 file."
             )
 
         model_to_estimate: Path | ModelConfiguration
-        if is_pytorch_file(model_path) or is_tosa_file(model_path):
+        if (
+            is_pytorch_file(model_path)
+            or is_tosa_file(model_path)
+            or is_pte_file(model_path)
+        ):
             model_to_estimate = model_path
         else:
             tflite_model = get_tflite_model(model_path, self.context)
