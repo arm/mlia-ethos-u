@@ -33,8 +33,9 @@ It extends the core MLIA framework with Arm Ethos-U target knowledge, operator
 analysis, bundled target profiles, and the backend integrations required for
 Vela compilation and Corstone-based performance flows.
 
-This is the package to install when you want MLIA to analyse TFLite models
-for Ethos-U55, Ethos-U65, or Ethos-U85 targets.
+This is the package to install when you want MLIA to analyse TensorFlow Lite
+models for Ethos-U55, Ethos-U65, or Ethos-U85 targets, or when you want to run
+the Corstone-based ExecuTorch AOT path for supported PyTorch inputs.
 
 ## Supported targets
 
@@ -62,7 +63,8 @@ and Ethos-U performance-related reporting based on the Vela toolchain.
 ### Corstone
 
 The Corstone backend supports simulation-oriented performance flows for
-Corstone platforms used in Ethos-U analysis and validation.
+Corstone platforms used in Ethos-U analysis and validation. It is also the
+backend path used for supported ExecuTorch `.pte` workloads.
 
 ## Installation
 
@@ -72,12 +74,29 @@ Install into an environment that already contains `mlia`:
 pip install mlia-ethos-u
 ```
 
+If you want MLIA to accept PyTorch `.pt2` inputs directly for the ExecuTorch
+flow, install the matching converter plugin as well:
+
+```bash
+pip install mlia-converters-pytorch
+```
+
 A typical MLIA workflow then references one of the bundled profiles, for
 example:
 
 ```bash
 mlia check model.tflite --target-profile ethos-u55-256
 ```
+
+For supported ExecuTorch AOT flows, a PyTorch-originating run can look like:
+
+```bash
+mlia check model.pt2 --target-profile ethos-u55-256 --performance --backend corstone-300
+```
+
+Direct `.pt2` support depends on `mlia-converters-pytorch`, and the current
+Corstone ExecuTorch path is only available for selected target and backend
+combinations.
 
 The package depends on `mlia>=0.11.0.dev6` and is intended to be used as part
 of a wider MLIA installation rather than as a standalone CLI.

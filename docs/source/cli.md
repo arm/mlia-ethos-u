@@ -70,6 +70,32 @@ mlia check model.tflite \
   --backend corstone
 ```
 
+## ExecuTorch AOT through Corstone
+
+The Corstone path can also run supported ExecuTorch workloads. If
+`mlia-converters-pytorch` is installed, MLIA can accept a `.pt2` input and
+convert it to `.pte` before running the Corstone backend:
+
+```bash
+mlia check model.pt2 \
+  --target-profile ethos-u55-256 \
+  --performance \
+  --backend corstone-300
+```
+
+If you already have a prepared `.pte` artifact, you can run it directly:
+
+```bash
+mlia check model.pte \
+  --target-profile ethos-u85-256 \
+  --performance \
+  --backend corstone-320
+```
+
+This path is currently limited to supported target and backend combinations, so
+it should be treated as a Corstone-specific workflow rather than a replacement
+for the normal Vela-first TFLite path.
+
 ## JSON output
 
 Use `--json` when you want to save results, compare runs, or inspect output more
@@ -98,4 +124,6 @@ If the result is not making sense, try this sequence:
 - Use `--backend vela` first if you want the fastest useful answer.
 - Use `--backend corstone` when you need deeper evidence before deciding what
   to change.
+- Use `.pt2` or `.pte` with Corstone only when you are explicitly exercising
+  the ExecuTorch AOT path.
 - Use `--json` when the result is something you expect to compare or archive.

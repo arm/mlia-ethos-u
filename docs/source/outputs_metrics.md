@@ -10,7 +10,8 @@ SPDX-License-Identifier: Apache-2.0
 Ethos-U runs in MLIA usually give you two things at once:
 
 - A quick human-readable summary in the console.
-- Structured results that you can inspect later, save as JSON, or compare`n  between runs.
+- Structured results that you can inspect later, save as JSON, or compare
+  between runs.
 
 The most important part is not the format itself, but what the output helps you
 decide. Good Ethos-U metrics help you answer questions like:
@@ -131,4 +132,5 @@ troubleshooting problem before drawing performance conclusions.
 
 - See [backends.md](backends.md) for choosing between `vela` and `corstone`.
 - See [cli.md](cli.md) for commands that produce these results.
-- See [troubleshooting.md](troubleshooting.md) if output is missing,`incomplete, or surprising.
+- See [troubleshooting.md](troubleshooting.md) if output is missing,
+  incomplete, or surprising.

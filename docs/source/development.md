@@ -55,10 +55,10 @@ uv build
 
 When you change one of these areas, review the others too:
 
-Target profile definitions and target-related tests
-Vela integration and compatibility or performance expectations
-Corstone integration and backend registration behaviour
-Advice generation or reporting logic and user-facing output examples
+- Target profile definitions and target-related tests.
+- Vela integration and compatibility or performance expectations.
+- Corstone integration and backend registration behaviour.
+- Advice generation or reporting logic and user-facing output examples.
 
 ## Good review questions
 

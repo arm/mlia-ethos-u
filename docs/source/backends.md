@@ -76,6 +76,8 @@ like:
 - Where is the system spending time beyond the top-level estimate?
 - Does a model that looks reasonable in Vela still look reasonable with richer
   backend evidence?
+- Do I need to run the supported ExecuTorch AOT path instead of the standard
+  TFLite flow?
 
 ### Corstone backend: good first commands
 
@@ -83,6 +85,12 @@ Run Corstone directly when you already know you want the deeper path:
 
 ```bash
 mlia check model.tflite --target-profile ethos-u65-512 --performance --backend corstone
+```
+
+Run a supported ExecuTorch AOT path through Corstone:
+
+```bash
+mlia check model.pt2 --target-profile ethos-u55-256 --performance --backend corstone-300
 ```
 
 Run both backends together when you want to compare the quick estimate with the
@@ -101,6 +109,7 @@ inspect:
 - Traffic-related signals.
 - Active-versus-idle style metrics.
 - Whether the deeper path changes your view of the model.
+- Supported Corstone execution for `.pte` and `.pt2` ExecuTorch workloads.
 
 ### When Corstone is worth the extra time
 
@@ -108,6 +117,9 @@ Use Corstone when the quick estimate is not enough to make a decision. That is
 usually the case when the result is surprising, when you need stronger evidence
 before acting, or when you are trying to explain where the cost is really
 coming from.
+
+It is also the backend path to use when you are intentionally validating a
+supported ExecuTorch AOT flow instead of the standard TFLite-based workflow.
 
 ## A practical workflow
 

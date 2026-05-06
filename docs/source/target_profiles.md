@@ -13,7 +13,8 @@ operator analysis, reporting, and the backend wiring needed for performance and
 compatibility flows.
 
 The plugin is intended for TensorFlow Lite models that will be analysed against
-Ethos-U55, Ethos-U65, or Ethos-U85 configurations.
+Ethos-U55, Ethos-U65, or Ethos-U85 configurations. It also participates in
+supported Corstone ExecuTorch flows for `.pt2` and `.pte` inputs.
 
 ## Bundled profiles
 
@@ -36,14 +37,22 @@ These profiles let MLIA select the correct accelerator configuration, memory
 mode, and backend assumptions without requiring a custom profile for common
 hardware targets.
 
-## Supported input format
+## Supported input formats
 
-The main supported input format in this package is:
+The most common input format in this package is:
 
 - TensorFlow Lite (`.tflite`).
 
-Quantized TFLite models are the natural fit for Ethos-U analysis and typically
-produce the most useful compatibility and performance results.
+Additional formats can also participate in Ethos-U workflows:
+
+- TOSA (`.tosa`, `.tosamlir`).
+- ExecuTorch exported program (`.pte`).
+- PyTorch exported program (`.pt2`) when `mlia-converters-pytorch` is
+  installed.
+
+Quantized TFLite models are still the natural fit for Vela and for most
+day-to-day Ethos-U analysis. The `.pt2` and `.pte` paths are specifically tied
+to supported Corstone ExecuTorch AOT flows.
 
 ## Typical usage
 
@@ -63,6 +72,18 @@ Run a more detailed performance flow with a Corstone backend:
 
 ```bash
 mlia check model.tflite --target-profile ethos-u65-512 --performance --backend corstone
+```
+
+Run a supported ExecuTorch AOT flow through Corstone:
+
+```bash
+mlia check model.pt2 --target-profile ethos-u55-256 --performance --backend corstone-300
+```
+
+You can also point the Corstone path at a prepared `.pte` artifact directly:
+
+```bash
+mlia check model.pte --target-profile ethos-u85-256 --performance --backend corstone-320
 ```
 
 ## Configuration concepts
@@ -85,7 +106,7 @@ produces:
 - Operator compatibility information.
 - Model-level performance estimates.
 - Per-operator reporting and advice.
-- Target-aware guidance for optimisation opportunities.
+- Target-aware guidance for compatibility and performance findings.
 
 The exact metrics depend on which backend is used. See [backends.md](backends.md)
 for the split between Vela and Corstone responsibilities.

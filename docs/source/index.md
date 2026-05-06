@@ -8,7 +8,8 @@ SPDX-License-Identifier: Apache-2.0
 ## Purpose
 
 `mlia-ethos-u` extends MLIA with Ethos-U target knowledge and the backend
-plugins needed for Vela and Corstone-based analysis flows.
+plugins needed for Vela and Corstone-based analysis flows, including supported
+ExecuTorch AOT runs through Corstone.
 
 ## Documentation Map
 

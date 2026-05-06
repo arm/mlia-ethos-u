@@ -59,6 +59,13 @@ the input itself first.
 - Prefer quantized TFLite models for Ethos-U analysis.
 - Re-check export settings if operator coverage looks unexpectedly poor.
 
+For the Corstone ExecuTorch path:
+
+- Use `.pt2` only when `mlia-converters-pytorch` is installed.
+- Use `.pte` only with supported Corstone target and backend combinations.
+- Do not expect `.pte` files to participate in the normal Vela compatibility
+  flow.
+
 ## The run succeeds, but the numbers are not helpful yet
 
 ### Memory pressure looks high
