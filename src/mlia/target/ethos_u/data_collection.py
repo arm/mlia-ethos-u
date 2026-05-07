@@ -151,7 +151,7 @@ class EthosUPerformance(ContextAwareDataCollector):
         self.target_config = target_config
         self.backends = backends
 
-    def collect_data(  # pylint: disable=too-many-branches
+    def collect_data(
         self,
     ) -> (
         PerformanceMetrics
@@ -195,7 +195,7 @@ class EthosUPerformance(ContextAwareDataCollector):
             model_to_estimate = tflite_model
 
         estimator = EthosUPerformanceEstimator(
-            self.context,  # type: ignore[arg-type]
+            self.context,
             self.target_config,
             self.backends,
         )
@@ -234,7 +234,7 @@ class EthosUPerformance(ContextAwareDataCollector):
                         backend_config=backend_config,
                         cli_arguments=cli_args,
                     )
-            except Exception as exc:  # pylint: disable=broad-exception-caught
+            except Exception as exc:
                 logger.warning(
                     "Failed to generate standardized output for Vela performance: %s",
                     exc,
@@ -266,7 +266,7 @@ class EthosUPerformance(ContextAwareDataCollector):
                     cli_arguments=cli_args,
                     backend_config=backend_config,
                 )
-        except Exception:  # pylint: disable=broad-exception-caught
+        except Exception:
             # Be resilient and fall back to legacy metrics on any error
             logger.exception(
                 "Failed to build standardized output from corstone metrics"
@@ -326,14 +326,13 @@ class EthosUPerformance(ContextAwareDataCollector):
         return "ethos_u_performance"
 
 
-# pylint: disable=too-many-ancestors
 class EthosUOptimizationPerformance(OptimizingPerformaceDataCollector):
     """Collect performance metrics for performance optimizations."""
 
     def create_estimator(self) -> PerformanceEstimator:
         """Create a PerformanceEstimator, to be overridden in subclasses."""
         return EthosUPerformanceEstimator(
-            self.context,  # type: ignore[arg-type]
+            self.context,
             cast(EthosUConfiguration, self.target),
             self.backends,
         )
@@ -343,8 +342,8 @@ class EthosUOptimizationPerformance(OptimizingPerformaceDataCollector):
     ) -> Any:
         """Create an optimization metrics object."""
         return OptimizationPerformanceMetrics(
-            original_perf_metrics=original_metrics,  # type: ignore
-            optimizations_perf_metrics=optimizations_perf_metrics,  # type: ignore
+            original_perf_metrics=original_metrics,
+            optimizations_perf_metrics=optimizations_perf_metrics,
         )
 
     @classmethod

@@ -7,6 +7,9 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
+pytest.importorskip("mlia.testing")
 
 from mlia.testing import e2e as mlia_e2e
 from mlia.testing.e2e import COMMON_PATTERNS

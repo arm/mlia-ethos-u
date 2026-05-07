@@ -18,7 +18,7 @@ def get_dataset() -> tuple[np.ndarray, np.ndarray]:
 
     # Use subset of 60000 examples to keep unit test speed fast.
     x_train = x_train[0:1]
-    y_train = y_train[0:1]  # pylint: disable=unsubscriptable-object
+    y_train = y_train[0:1]
 
     return x_train, y_train
 

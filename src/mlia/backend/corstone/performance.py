@@ -9,7 +9,7 @@ import csv
 import json
 import logging
 import re
-import subprocess  # nosec
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -133,9 +133,7 @@ class CorstoneModelPerformanceMetrics:
             ],
         }
         metric_names = target_metric_maps.get(target, target_metric_maps["default"])
-        class_fields = list(
-            cls.__dataclass_fields__.keys()  # pylint: disable=no-member
-        )
+        class_fields = list(cls.__dataclass_fields__.keys())
         class_kwargs = {}
         for idx, metric_name in enumerate(metric_names):
             if metric_name in fvp_metrics and idx < len(class_fields):
@@ -162,7 +160,7 @@ class CorstonePerformanceMetrics:
             _parse_per_layer_csv(per_layer_file) if per_layer_file else [],
         )
 
-    def to_standardized_output(  # pylint: disable=too-many-locals
+    def to_standardized_output(
         self,
         model_path: Path,
         backend_name: str,

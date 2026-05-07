@@ -167,6 +167,8 @@ class EthosUEventHandler(WorkflowEventsHandler, EthosUAdvisorEventHandler):
         """
         if not result_item or not result_item.standardized_output:
             return
+        if self.output_dir is None:
+            return
 
         try:
             # Get the standardized output dictionary
@@ -178,7 +180,7 @@ class EthosUEventHandler(WorkflowEventsHandler, EthosUAdvisorEventHandler):
                     result["advices"] = [a.to_dict() for a in advices]
 
             # Write to file
-            output_path = self.output_dir / filename  # type: ignore
+            output_path = self.output_dir / filename
             with open(output_path, "w", encoding="utf-8") as file_handle:
                 json.dump(output, file_handle, indent=2)
             logger.info("Saved output with advice to %s", output_path)

@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 try:  # pragma: no cover - exercised when legacy is installed
-    from mlia.target.common.optimization import (  # pylint: disable=import-error
+    from mlia.target.common.optimization import (
         OptimizingDataCollector as OptimizingPerformaceDataCollector,
         add_common_optimization_params,
     )
@@ -21,9 +21,9 @@ try:  # pragma: no cover - exercised when legacy is installed
 except ModuleNotFoundError:  # pragma: no cover - minimal fallback
     # disable optimization if module is not present
     LEGACY_OPTIMIZATION_AVAILABLE = False
-    OptimizingPerformaceDataCollector = object  # type: ignore[assignment]
+    OptimizingPerformaceDataCollector = object
 
-    def add_common_optimization_params(  # type: ignore[override]
+    def add_common_optimization_params(
         _advisor_parameters: dict[str, Any], _extra_args: dict[str, Any]
     ) -> None:
         """Fallback helper for common optimization parameters."""

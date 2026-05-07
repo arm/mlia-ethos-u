@@ -196,7 +196,7 @@ class EthosUDataAnalyzer(FactExtractor):
     """Ethos-U data analyzer."""
 
     @singledispatchmethod
-    def analyze_data(self, data_item: DataItem) -> None:  # type: ignore
+    def analyze_data(self, data_item: DataItem) -> None:
         """Analyze the data."""
         logger.debug(
             "Unhandled data_item type: %s - %s.%s",

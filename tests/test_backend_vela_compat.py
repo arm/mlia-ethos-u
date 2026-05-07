@@ -258,23 +258,23 @@ def test_operators_to_standardized_output(tmp_path: Path) -> None:
     )
 
     # Verify structure
-    assert "schema_version" in output  # pylint: disable=unsupported-membership-test
+    assert "schema_version" in output
     assert output["schema_version"] == schema.SCHEMA_VERSION
-    assert "backends" in output  # pylint: disable=unsupported-membership-test
-    assert "target" in output  # pylint: disable=unsupported-membership-test
-    assert "model" in output  # pylint: disable=unsupported-membership-test
-    assert "context" in output  # pylint: disable=unsupported-membership-test
-    assert "results" in output  # pylint: disable=unsupported-membership-test
+    assert "backends" in output
+    assert "target" in output
+    assert "model" in output
+    assert "context" in output
+    assert "results" in output
 
     # Verify backend
-    backends = output["backends"]  # pylint: disable=unsupported-membership-test
+    backends = output["backends"]
     assert len(backends) == 1
     backend = backends[0]
     assert backend["name"] == "Vela Compiler"
     assert "version" in backend
 
     # Verify result
-    results = output["results"]  # pylint: disable=unsupported-membership-test
+    results = output["results"]
     assert len(results) == 1
     result = results[0]
     assert result["kind"] == "compatibility"
@@ -332,7 +332,24 @@ def test_operators_to_standardized_output_all_supported(tmp_path: Path) -> None:
         model_path=model_file,
     )
 
-    results = output["results"]  # pylint: disable=unsupported-membership-test
+    results = output["results"]
     assert len(results) == 1
     result = results[0]
     assert result["status"] == "ok"  # All supported
+
+
+def test_operators_to_standardized_output_handles_broken_vela(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Standardized output should tolerate Vela version lookup failures."""
+    monkeypatch.setattr(
+        "mlia.backend.vela.compat._get_vela_deps",
+        MagicMock(side_effect=RuntimeError("broken vela")),
+    )
+    model_file = tmp_path / "model.tflite"
+    model_file.write_bytes(b"test model content")
+
+    output = Operators([]).to_standardized_output(model_path=model_file)
+
+    assert output["backends"][0]["version"] == "unknown"

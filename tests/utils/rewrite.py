@@ -32,7 +32,7 @@ def models_are_equal(model1: ModelT, model2: ModelT) -> bool:
     return True
 
 
-class MockTrainingParameters(TrainingParameters):  # pylint: disable=too-few-public-methods
+class MockTrainingParameters(TrainingParameters):
     """
     TrainingParameter class for rewrites with different default values.
 

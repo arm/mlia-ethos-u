@@ -413,7 +413,7 @@ def test_backend_compiler_summary_csv_parsed_missing_headers(
         csv_file.write(SUMMARY_TMP_DATA_MISSING_HEADER)
     with pytest.raises(
         KeyError,
-        match="Generated Vela Summary CSV missing expected header: cycles_total.",  # pylint: disable=line-too-long
+        match="Generated Vela Summary CSV missing expected header: cycles_total.",
     ):
         parse_summary_csv_file(test_csv_file)
 
@@ -740,7 +740,7 @@ def test_preprocess_model_tflite_passthrough() -> None:
     compiler = VelaCompiler(compiler_options)
 
     tflite_path = Path("model.tflite")
-    result = compiler._preprocess_model(tflite_path)  # pylint: disable=protected-access
+    result = compiler._preprocess_model(tflite_path)
 
     assert result == tflite_path
 
@@ -751,7 +751,7 @@ def test_preprocess_model_tosa_passthrough() -> None:
     compiler = VelaCompiler(compiler_options)
 
     tosa_path = Path("model.tosa")
-    result = compiler._preprocess_model(tosa_path)  # pylint: disable=protected-access
+    result = compiler._preprocess_model(tosa_path)
 
     assert result == tosa_path
 
@@ -766,8 +766,8 @@ def test_preprocess_model_non_pytorch_does_not_load_plugin(
     load_mock = MagicMock()
     monkeypatch.setattr(vela_compiler_module, "_get_converter", load_mock)
 
-    _ = compiler._preprocess_model(Path("model.tflite"))  # pylint: disable=protected-access
-    _ = compiler._preprocess_model(Path("model.tosa"))  # pylint: disable=protected-access
+    _ = compiler._preprocess_model(Path("model.tflite"))
+    _ = compiler._preprocess_model(Path("model.tosa"))
 
     load_mock.assert_not_called()
 
@@ -784,7 +784,7 @@ def test_preprocess_model_pytorch_conversion(monkeypatch: Any) -> None:
     monkeypatch.setattr(compiler, "_convert_pytorch_to_tosa", mock_convert)
 
     pt2_path = Path("model.pt2")
-    result = compiler._preprocess_model(pt2_path)  # pylint: disable=protected-access
+    result = compiler._preprocess_model(pt2_path)
 
     assert result == expected_tosa_path
     mock_convert.assert_called_once_with(pt2_path, compiler.output_dir)
@@ -804,7 +804,6 @@ def test_convert_pytorch_to_tosa_conversion_failure(monkeypatch: Any) -> None:
         pytorch_model.write_text("sample", encoding="utf8")
 
         with pytest.raises(RuntimeError, match="Failed to convert PyTorch model"):
-            # pylint: disable=protected-access
             VelaCompiler._convert_pytorch_to_tosa(pytorch_model, Path("output"))
 
 
@@ -826,7 +825,6 @@ def test_convert_pytorch_to_tosa_missing_plugin(monkeypatch: Any) -> None:
         pytorch_model.write_text("sample", encoding="utf8")
 
         with pytest.raises(ConfigurationError, match="mlia-converters-pytorch"):
-            # pylint: disable=protected-access
             VelaCompiler._convert_pytorch_to_tosa(pytorch_model, Path("output"))
 
 
@@ -834,7 +832,7 @@ def test_convert_pytorch_to_tosa_missing_plugin(monkeypatch: Any) -> None:
     "file_extension",
     [".tflite", ".tosa"],
 )
-def test_compile_model_with_supported_formats(  # pylint: disable=protected-access
+def test_compile_model_with_supported_formats(
     file_extension: str, test_resources_path: Path, tmp_path: Path
 ) -> None:
     """Test that compile_model preprocessing works with TFLite and TOSA files."""

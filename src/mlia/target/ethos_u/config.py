@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from mlia.backend.corstone import is_corstone_backend
 from mlia.backend.errors import BackendUnavailableError
@@ -13,40 +13,25 @@ from mlia.backend.manager import get_available_backends
 from mlia.target.config import TargetProfile
 from mlia.utils.filesystem import get_vela_config
 
-# Dynamic imports with fallback for when Vela is not available
-try:
+if TYPE_CHECKING:
     from mlia.backend.vela.compiler import (
         VelaCompilerOptions,
-        VelaInitData,  # pylint: disable=unused-import
-        resolve_compiler_config,
+        VelaInitData,
     )
 
-    _VELA_AVAILABLE = True
-except ImportError:
-    # Type stubs for when Vela is not available
-    from typing import TYPE_CHECKING
+logger = logging.getLogger(__name__)
 
-    if TYPE_CHECKING:
+
+def _load_vela() -> tuple[type[Any] | None, Any | None]:
+    """Load Vela compiler symbols lazily to allow auto-install at runtime."""
+    try:
         from mlia.backend.vela.compiler import (
             VelaCompilerOptions,
-            VelaInitData,
             resolve_compiler_config,
         )
-    else:
-
-        def __getattr__(name: str) -> Any:
-            """Raise BackendUnavailableError for Vela-related attributes."""
-            if name in {
-                "VelaCompilerOptions",
-                "VelaInitData",
-                "resolve_compiler_config",
-            }:
-                raise BackendUnavailableError("Backend vela is not available", "vela")
-            raise AttributeError(name)
-
-    _VELA_AVAILABLE = False
-
-logger = logging.getLogger(__name__)
+    except ImportError:
+        return None, None
+    return VelaCompilerOptions, resolve_compiler_config
 
 
 class EthosUConfiguration(TargetProfile):
@@ -66,7 +51,8 @@ class EthosUConfiguration(TargetProfile):
 
         self.mac = mac
 
-        if not _VELA_AVAILABLE:
+        vela_compiler_options, _ = _load_vela()
+        if vela_compiler_options is None:
             # Store parameters for later use when Vela becomes available
             self._vela_options_kwargs = {
                 "system_config": kwargs["system_config"],
@@ -76,11 +62,11 @@ class EthosUConfiguration(TargetProfile):
             }
             self.compiler_options: VelaCompilerOptions | None = None
         else:
-            self.compiler_options = VelaCompilerOptions(
+            self.compiler_options = vela_compiler_options(
                 system_config=kwargs["system_config"],
                 memory_mode=kwargs["memory_mode"],
                 config_file=str(config_in),
-                accelerator_config=f"{self.target}-{mac}",  # type: ignore
+                accelerator_config=f"{self.target}-{mac}",
             )
 
     def verify(self) -> None:
@@ -105,7 +91,8 @@ class EthosUConfiguration(TargetProfile):
     @property
     def resolved_compiler_config(self) -> VelaInitData:
         """Resolve compiler configuration."""
-        if not _VELA_AVAILABLE:
+        vela_compiler_options, resolve_compiler_config = _load_vela()
+        if vela_compiler_options is None or resolve_compiler_config is None:
             raise BackendUnavailableError("Backend vela is not available", "vela")
         if self.compiler_options is None:
             raise BackendUnavailableError("Backend vela is not available", "vela")

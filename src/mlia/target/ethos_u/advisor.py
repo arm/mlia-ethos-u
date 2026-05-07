@@ -49,7 +49,7 @@ _OPTIMIZATION_COLLECTOR_NAME = "common_optimizations"
 def _get_optimization_collector_name() -> str:
     """Return optimization collector name from legacy module if available."""
     try:
-        from mlia.target.common.optimization import OptimizingDataCollector  # pylint: disable=import-error
+        from mlia.target.common.optimization import OptimizingDataCollector
 
         return OptimizingDataCollector.name()
     except ModuleNotFoundError:
@@ -189,7 +189,7 @@ class EthosUInferenceAdvisor(DefaultInferenceAdvisor):
 
     def _get_backends(self, context: Context) -> list[str] | None:
         """Get list of backends."""
-        return self.get_parameter(  # type: ignore
+        return self.get_parameter(
             self.name(),
             "backends",
             expected_type=list,

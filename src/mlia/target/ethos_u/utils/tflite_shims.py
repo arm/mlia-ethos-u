@@ -103,7 +103,7 @@ except ModuleNotFoundError:
                 if err.code == TFLiteConversionErrorCode.NEEDS_FLEX_OPS
             ]
 
-    class LegacyChecker:  # type: ignore[no-redef, override]
+    class LegacyChecker:  # type: ignore[no-redef]
         """Stub checker that requires legacy TensorFlow helpers."""
 
         def __init__(self, quantized: bool = False) -> None:
@@ -124,13 +124,13 @@ TFLiteChecker = LegacyChecker
 
 # Model conversion helpers
 try:  # pragma: no cover - exercised when legacy is installed
-    from mlia.nn.tensorflow.config import (  # pylint: disable=import-error
+    from mlia.nn.tensorflow.config import (
         ModelConfiguration,
         get_tflite_model,
     )
 except ModuleNotFoundError:  # pragma: no cover - minimal fallback
 
-    class ModelConfiguration:  # type: ignore[no-redef, override]
+    class ModelConfiguration:  # type: ignore[no-redef]
         """Minimal model configuration wrapper."""
 
         def __init__(self, model_path: str | Path) -> None:
@@ -159,7 +159,7 @@ def is_legacy_model(model: Any) -> bool:
         except NameError:
             return _is_legacy_model_path(model)
     try:
-        return isinstance(model, keras.Model)  # type: ignore[name-defined]
+        return isinstance(model, keras.Model)
     except NameError:
         return False
 

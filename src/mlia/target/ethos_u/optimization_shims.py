@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 try:  # pragma: no cover - exercised when legacy is installed
-    from mlia.nn.select import OptimizationSettings  # pylint: disable=import-error
+    from mlia.nn.select import OptimizationSettings
 except ModuleNotFoundError:  # pragma: no cover - minimal fallback
 
     @dataclass

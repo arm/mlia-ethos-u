@@ -56,6 +56,7 @@ fallback-version = "0.0.0.dev0"
 [tool.mypy]
 # Suppress errors for optional dependencies and cross-repo imports.
 ignore_missing_imports = true
+warn_unused_ignores = true
 
 [tool.blocklint]
 max_issue_threshold = 1

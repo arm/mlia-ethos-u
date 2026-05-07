@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import base64
-import subprocess  # nosec
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Generator
@@ -647,7 +647,7 @@ def test_performance_metrics_to_standardized_output_with_null_axi1_wr(
     assert len(metrics) == 6
 
 
-def test_ethosu_collector_and_handler_write_json(  # pylint: disable=too-many-locals
+def test_ethosu_collector_and_handler_write_json(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Collector should return CorstonePerformanceResult and handler should write JSON.
@@ -695,7 +695,7 @@ def test_ethosu_collector_and_handler_write_json(  # pylint: disable=too-many-lo
         ) -> None:
             pass
 
-        def estimate(self, model_arg: Any) -> Any:  # pylint: disable=unused-argument
+        def estimate(self, model_arg: Any) -> Any:
             """Return test performance metrics."""
             return ethos_perf
 
@@ -731,7 +731,7 @@ def test_ethosu_collector_and_handler_write_json(  # pylint: disable=too-many-lo
             standardized = collected.to_standardized_output(
                 model_path=model, backend_name="corstone-300"
             )
-        except Exception:  # pylint: disable=broad-exception-caught
+        except Exception:
             standardized = None
 
         wrapped = CorstonePerformanceResult(

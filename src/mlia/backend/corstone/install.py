@@ -1,17 +1,13 @@
 # SPDX-FileCopyrightText: Copyright 2022-2026, Arm Limited and/or its affiliates.
 # SPDX-License-Identifier: Apache-2.0
-"""Module for Corstone based FVPs.
-
-The import of subprocess module raises a B404 bandit error. MLIA usage of
-subprocess is needed and can be considered safe hence disabling the security
-check.
-"""
+"""Module for Corstone based FVPs."""
 
 from __future__ import annotations
 
 import logging
 import re
-import subprocess  # nosec
+import subprocess
+from inspect import signature
 from pathlib import Path
 
 from mlia.backend.config import System
@@ -30,6 +26,11 @@ logger = logging.getLogger(__name__)
 ARM_ECOSYSTEM_FVP_URL = (
     "https://developer.arm.com/-/cdn-downloads/permalink/FVPs-Corstone-IoT/"
 )
+
+
+def _backend_installation_supports_requires_eula() -> bool:
+    """Return whether the installed MLIA core supports requires_eula."""
+    return "requires_eula" in signature(BackendInstallation.__init__).parameters
 
 
 class CorstoneFVP:
@@ -57,7 +58,6 @@ class CorstoneFVP:
         return ["VHT" + fvp.split("/")[-1][3:] for fvp in self.fvp_expected_files]
 
 
-# pylint: disable=line-too-long
 CORSTONE_FVPS: dict[str, dict[str, CorstoneFVP]] = {
     "corstone-300": {
         "x86": CorstoneFVP(
@@ -147,11 +147,8 @@ class CorstoneInstaller:
                         "--i-agree-to-the-contained-eula",
                     ]
 
-                # The following line raises a B603 error for bandit. In this
-                # specific case, the input is pretty much static and cannot be
-                # changed by the user hence disabling the security check for
-                # this instance
-                subprocess.check_call(fvp_install_cmd)  # nosec
+                # The command is assembled from installer metadata and fixed flags.
+                subprocess.check_call(fvp_install_cmd)
             except subprocess.CalledProcessError as err:
                 raise RuntimeError(
                     f"Error occurred during '{self.name}' installation"
@@ -177,16 +174,16 @@ def get_corstone_installation(corstone_name: str) -> Installation | None:
     expected_files_vht = corstone_fvp.get_vht_expected_files()
     backend_subfolder = expected_files_fvp[0].split("FVP")[0]
 
-    corstone_install = BackendInstallation(
-        name=corstone_name,
-        description=corstone_name.capitalize() + " FVP",
-        fvp_dir_name=corstone_name.replace("-", "_"),
-        download_config=DownloadConfig(
+    kwargs = {
+        "name": corstone_name,
+        "description": corstone_name.capitalize() + " FVP",
+        "fvp_dir_name": corstone_name.replace("-", "_"),
+        "download_config": DownloadConfig(
             url=url,
             sha256_hash=sha256_hash,
         ),
-        supported_platforms=["Linux"],
-        path_checker=CompoundPathChecker(
+        "supported_platforms": ["Linux"],
+        "path_checker": CompoundPathChecker(
             PackagePathChecker(
                 expected_files=expected_files_fvp,
                 backend_subfolder=backend_subfolder,
@@ -199,8 +196,15 @@ def get_corstone_installation(corstone_name: str) -> Installation | None:
                 settings={"profile": "AVH"},
             ),
         ),
-        backend_installer=CorstoneInstaller(name=corstone_name),
-        dependencies=["vela"],
-    )
+        "backend_installer": CorstoneInstaller(name=corstone_name),
+        "dependencies": ["vela"],
+    }
+    supports_requires_eula = _backend_installation_supports_requires_eula()
+    if supports_requires_eula:
+        kwargs["requires_eula"] = True
+
+    corstone_install = BackendInstallation(**kwargs)
+    if not supports_requires_eula:
+        corstone_install.requires_eula = True
 
     return corstone_install

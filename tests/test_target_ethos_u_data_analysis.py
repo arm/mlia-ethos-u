@@ -611,6 +611,6 @@ def test_ethos_u_data_analyzer_logs_unhandled_data(
     monkeypatch.setattr("mlia.target.ethos_u.data_analysis.logger", logger)
 
     analyzer = EthosUDataAnalyzer()
-    analyzer.analyze_data(object())  # type: ignore[arg-type]
+    analyzer.analyze_data(object())
 
     logger.debug.assert_called_once()

@@ -10,7 +10,7 @@ If the header is out of date it will print a warning.
 import datetime
 import os
 import re
-import subprocess  # nosec
+import subprocess
 import sys
 from pathlib import Path
 
@@ -163,7 +163,7 @@ class CopyrightHeaderChecker:
 if __name__ == "__main__":
     # Check staged files
     staged_files = (
-        subprocess.check_output(["git", "diff", "--cached", "--name-only"])  # nosec
+        subprocess.check_output(["git", "diff", "--cached", "--name-only"])
         .decode()
         .splitlines()
     )
@@ -172,7 +172,7 @@ if __name__ == "__main__":
     # might have been committed with --no-verify and outdated headers.
     try:
         recently_modified_files = (
-            subprocess.check_output(["git", "diff", "--name-only", "HEAD~1", "HEAD"])  # nosec
+            subprocess.check_output(["git", "diff", "--name-only", "HEAD~1", "HEAD"])
             .decode()
             .splitlines()
         )
@@ -184,7 +184,7 @@ if __name__ == "__main__":
     all_files_to_check = list(set(staged_files + recently_modified_files))
 
     checker = CopyrightHeaderChecker()
-    # pylint: disable-next=invalid-name
+
     headers_are_valid = checker.check_files_have_updated_header(
         filenames=all_files_to_check
     )

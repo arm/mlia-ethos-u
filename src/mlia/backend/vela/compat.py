@@ -17,22 +17,34 @@ from mlia.target.ethos_u.utils.model_format import is_pytorch_file, is_tosa_file
 from mlia.utils.filesystem import sha256
 from mlia.utils.logging import redirect_output
 
-try:
-    from ethosu.vela import __version__ as ethosu_vela_version
-    from ethosu.vela.operation import Op
-    from ethosu.vela.tflite_mapping import optype_to_builtintype
-    from ethosu.vela.tflite_model_semantic import TFLiteSemantic
-    from ethosu.vela.tflite_supported_operators import TFLiteSupportedOperators
-    from ethosu.vela.vela import generate_supported_ops
+if TYPE_CHECKING:
+    from mlia.backend.vela.compiler import VelaCompiler
 
-    from mlia.backend.vela.compiler import VelaCompiler  # pylint: disable=C0412
-    from mlia.backend.vela.performance import layer_metrics
-    from mlia.backend.vela.performance import parse_layerwise_perf_csv
 
-    _VELA_INSTALLED = True
+@dataclass(frozen=True)
+class VelaDeps:
+    """Resolved Vela dependencies."""
 
-except ImportError:
-    if TYPE_CHECKING:
+    ethosu_vela_version: str
+    Op: Any
+    optype_to_builtintype: Any
+    TFLiteSemantic: Any
+    TFLiteSupportedOperators: Any
+    generate_supported_ops: Any
+    VelaCompiler: Any
+    layer_metrics: Any
+    parse_layerwise_perf_csv: Any
+
+
+_VELA_DEPS_CACHE: VelaDeps | None = None
+
+
+def _load_vela_deps() -> VelaDeps:
+    """Load Vela modules on demand."""
+    try:
+        import importlib
+
+        importlib.invalidate_caches()
         from ethosu.vela import __version__ as ethosu_vela_version
         from ethosu.vela.operation import Op
         from ethosu.vela.tflite_mapping import optype_to_builtintype
@@ -43,25 +55,30 @@ except ImportError:
         from mlia.backend.vela.compiler import VelaCompiler
         from mlia.backend.vela.performance import layer_metrics
         from mlia.backend.vela.performance import parse_layerwise_perf_csv
-    else:
+    except ImportError as exc:
+        raise BackendUnavailableError("Backend vela is not available", "vela") from exc
 
-        def __getattr__(name: str) -> Any:
-            """Raise BackendUnavailableError for Vela-related attributes."""
-            if name in {
-                "Op",
-                "optype_to_builtintype",
-                "TFLiteSemantic",
-                "TFLiteSupportedOperators",
-                "generate_supported_ops",
-                "VelaCompiler",
-                "ethosu_vela_version",
-                "layer_metrics",
-                "parse_layerwise_perf_csv",
-            }:
-                raise BackendUnavailableError("Backend vela is not available", "vela")
-            raise AttributeError(name)
+    return VelaDeps(
+        ethosu_vela_version=ethosu_vela_version,
+        Op=Op,
+        optype_to_builtintype=optype_to_builtintype,
+        TFLiteSemantic=TFLiteSemantic,
+        TFLiteSupportedOperators=TFLiteSupportedOperators,
+        generate_supported_ops=generate_supported_ops,
+        VelaCompiler=VelaCompiler,
+        layer_metrics=layer_metrics,
+        parse_layerwise_perf_csv=parse_layerwise_perf_csv,
+    )
 
-    _VELA_INSTALLED = False
+
+def _get_vela_deps() -> VelaDeps:
+    """Return cached Vela deps or load them."""
+    global _VELA_DEPS_CACHE
+
+    if _VELA_DEPS_CACHE is None:
+        _VELA_DEPS_CACHE = _load_vela_deps()
+    return _VELA_DEPS_CACHE
+
 
 logger = logging.getLogger(__name__)
 
@@ -142,7 +159,7 @@ class Operators:
         """Return number of npu supported operators."""
         return sum(op.run_on_npu.supported for op in self.ops)
 
-    def to_standardized_output(  # pylint: disable=too-many-locals
+    def to_standardized_output(
         self,
         model_path: Path,
         run_id: str | None = None,
@@ -164,7 +181,6 @@ class Operators:
         Returns:
             Standardized output dictionary
         """
-        # pylint: disable=duplicate-code
         # Generate run_id and timestamp if not provided
         if run_id is None:
             run_id = schema.StandardizedOutput.create_run_id()
@@ -176,8 +192,9 @@ class Operators:
 
         # Create backend with version
         try:
-            backend_version = ethosu_vela_version
-        except Exception as exc:  # pylint: disable=broad-exception-caught
+            deps = _get_vela_deps()
+            backend_version = deps.ethosu_vela_version
+        except Exception as exc:
             logger.warning("Failed to get vela version: %s", exc)
             backend_version = "unknown"
 
@@ -307,6 +324,7 @@ def _supported_pytorch_operators(
     compiler_options: Any,
     vela_compiler: VelaCompiler,
     vela_internal_ops: tuple,
+    deps: VelaDeps,
 ) -> Operators:
     """Extract operators from PyTorch/TOSA models via layerwise CSV.
 
@@ -341,11 +359,14 @@ def _supported_pytorch_operators(
                 compiled_model_path,
             )
             return Operators([])
-        # pylint: disable=protected-access
         graph, _ = vela_compiler._read_model(compiled_model_path)
         return Operators(
             [
-                Operator(op.name, optype_to_builtintype(op.type), _run_on_npu(op))
+                Operator(
+                    op.name,
+                    deps.optype_to_builtintype(op.type),
+                    _run_on_npu(op, deps),
+                )
                 for sg in graph.subgraphs
                 for op in sg.get_all_ops()
                 if op.type not in vela_internal_ops
@@ -353,8 +374,8 @@ def _supported_pytorch_operators(
         )
 
     csv_path = csv_paths[0]
-    original_layerwise_info = parse_layerwise_perf_csv(
-        vela_csv_file=csv_path, metrics=layer_metrics
+    original_layerwise_info = deps.parse_layerwise_perf_csv(
+        vela_csv_file=csv_path, metrics=deps.layer_metrics
     )
 
     operators = [
@@ -378,25 +399,31 @@ def supported_operators(model_path: Path, compiler_options: Any) -> Operators:
     layerwise performance CSV which preserves original operator details.
     For TFLite files, analyzes the model directly using Vela's Python API.
     """
-    # pylint: disable=too-many-locals,protected-access
-    if not get_vela():
-        raise BackendUnavailableError("Backend vela is not available", "vela")
+    deps = _get_vela_deps()
 
     logger.debug("Check supported operators for the model %s", model_path)
 
-    vela_internal_ops = (Op.Placeholder, Op.SubgraphInput, Op.Const)
-    vela_compiler = VelaCompiler(compiler_options)
+    vela_internal_ops = (
+        deps.Op.Placeholder,
+        deps.Op.SubgraphInput,
+        deps.Op.Const,
+    )
+    vela_compiler = deps.VelaCompiler(compiler_options)
 
     if is_pytorch_file(model_path) or is_tosa_file(model_path):
         return _supported_pytorch_operators(
-            model_path, compiler_options, vela_compiler, vela_internal_ops
+            model_path, compiler_options, vela_compiler, vela_internal_ops, deps
         )
 
     graph, _ = vela_compiler._read_model(model_path)
 
     return Operators(
         [
-            Operator(op.name, optype_to_builtintype(op.type), _run_on_npu(op))
+            Operator(
+                op.name,
+                deps.optype_to_builtintype(op.type),
+                _run_on_npu(op, deps),
+            )
             for sg in graph.subgraphs
             for op in sg.get_all_ops()
             if op.type not in vela_internal_ops
@@ -404,7 +431,7 @@ def supported_operators(model_path: Path, compiler_options: Any) -> Operators:
     )
 
 
-def _run_on_npu(operator) -> NpuSupported:  # type: ignore
+def _run_on_npu(operator, deps: VelaDeps) -> NpuSupported:
     """Return information if operator can run on NPU.
 
     Vela does a number of checks that can help establish whether
@@ -421,11 +448,12 @@ def _run_on_npu(operator) -> NpuSupported:  # type: ignore
       - general description of why the operator cannot be placed on NPU
       - details on the particular operator
     """
-    if not get_vela():
-        raise BackendUnavailableError("Backend vela is not available", "vela")
-
-    vela_internal_ops = (Op.Placeholder, Op.SubgraphInput, Op.Const)
-    semantic_checker = TFLiteSemantic()
+    vela_internal_ops = (
+        deps.Op.Placeholder,
+        deps.Op.SubgraphInput,
+        deps.Op.Const,
+    )
+    semantic_checker = deps.TFLiteSemantic()
     semantic_constraints = itertools.chain(
         semantic_checker.generic_constraints,
         semantic_checker.specific_constraints[operator.type],
@@ -436,7 +464,7 @@ def _run_on_npu(operator) -> NpuSupported:  # type: ignore
         if not op_valid:
             return NpuSupported(False, [(constraint.__doc__, op_reason)])
 
-    if operator.type not in TFLiteSupportedOperators.supported_operators:
+    if operator.type not in deps.TFLiteSupportedOperators.supported_operators:
         reasons = (
             [("CPU only operator", "")]
             if operator.type not in vela_internal_ops
@@ -445,7 +473,7 @@ def _run_on_npu(operator) -> NpuSupported:  # type: ignore
 
         return NpuSupported(False, reasons)
 
-    tflite_supported_operators = TFLiteSupportedOperators()
+    tflite_supported_operators = deps.TFLiteSupportedOperators()
     operation_constraints = itertools.chain(
         tflite_supported_operators.generic_constraints,
         tflite_supported_operators.specific_constraints[operator.type],
@@ -460,13 +488,16 @@ def _run_on_npu(operator) -> NpuSupported:  # type: ignore
 
 def generate_supported_operators_report() -> None:
     """Generate supported operators report in current working directory."""
-    if not get_vela():
-        raise BackendUnavailableError("Backend vela is not available", "vela")
+    deps = _get_vela_deps()
 
     with redirect_output(logger):
-        generate_supported_ops()
+        deps.generate_supported_ops()
 
 
 def get_vela() -> bool:
     """Check if vela backend is available."""
-    return _VELA_INSTALLED
+    try:
+        _get_vela_deps()
+    except BackendUnavailableError:
+        return False
+    return True

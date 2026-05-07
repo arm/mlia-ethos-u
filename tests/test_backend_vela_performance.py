@@ -18,7 +18,7 @@ else:
     # Only reference ethosu.vela if it was successfully imported
     _ = ethosu.vela
 
-from typing import get_type_hints
+from typing import TypedDict, get_type_hints
 
 from mlia.backend.vela.compiler import (
     VelaSummary,
@@ -34,6 +34,23 @@ from mlia.backend.vela.performance import (
 )
 from mlia.target.ethos_u.config import EthosUConfiguration  # noqa: E402
 from mlia.utils.filesystem import recreate_directory  # noqa: E402
+
+
+class ExpectedMetric(TypedDict):
+    """Expected standardized metric representation."""
+
+    name: str
+    value: int | float
+    unit: str
+
+
+class ExpectedBreakdown(TypedDict):
+    """Expected standardized breakdown representation."""
+
+    scope: str
+    name: str
+    location: str
+    metrics: dict[str, ExpectedMetric]
 
 
 def test_estimate_performance(test_tflite_model: Path) -> None:
@@ -391,7 +408,7 @@ def test_to_standardized_output(
     assert len(results["breakdowns"]) == 2
     breakdowns = results["breakdowns"]
 
-    expected_breakdowns = [
+    expected_breakdowns: list[ExpectedBreakdown] = [
         {
             "scope": "operator",
             "name": "CONV_2D",
@@ -473,9 +490,7 @@ def test_to_standardized_output(
         assert len(breakdowns[i]["metrics"]) == len(expected["metrics"])
 
         metrics = {m["name"]: m for m in breakdowns[i]["metrics"]}
-        for metric_name, expected_metric in expected[  # type: ignore[attr-defined]
-            "metrics"
-        ].items():
+        for metric_name, expected_metric in expected["metrics"].items():
             assert metrics[metric_name] == expected_metric
 
 

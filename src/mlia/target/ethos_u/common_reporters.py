@@ -82,7 +82,7 @@ def report_tflite_compatibility(compat_info: TFLiteCompatibilityInfo) -> Report:
     )
 
 
-def handle_model_is_not_tflite_compatible_common(  # type: ignore
+def handle_model_is_not_tflite_compatible_common(
     self, data_item: ModelIsNotTFLiteCompatible
 ) -> None:
     """Advice for TensorFlow Lite compatibility."""
@@ -131,7 +131,7 @@ def handle_model_is_not_tflite_compatible_common(  # type: ignore
         )
 
 
-def handle_tflite_check_failed_common(  # type: ignore
+def handle_tflite_check_failed_common(
     self, _data_item: TFLiteCompatibilityCheckFailed
 ) -> None:
     """Advice for the failed TensorFlow Lite compatibility checks."""
@@ -145,7 +145,7 @@ def handle_tflite_check_failed_common(  # type: ignore
     )
 
 
-def analyze_tflite_compatibility_common(  # type: ignore
+def analyze_tflite_compatibility_common(
     self, data_item: TFLiteCompatibilityInfo
 ) -> None:
     """Analyze TensorFlow Lite compatibility information."""

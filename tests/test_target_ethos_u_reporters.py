@@ -31,7 +31,6 @@ from mlia.target.registry import profile
 from mlia.utils.console import remove_ascii_codes
 
 
-# pylint: disable=line-too-long
 @pytest.mark.parametrize(
     "perf_metrics, expected_plain_text, expected_json_dict",
     [
@@ -233,7 +232,6 @@ Layer-Wise Metrics:
         ),
     ],
 )
-# pylint: enable=line-too-long
 def test_report_perf_metrics(
     perf_metrics: PerformanceMetrics,
     expected_plain_text: str,

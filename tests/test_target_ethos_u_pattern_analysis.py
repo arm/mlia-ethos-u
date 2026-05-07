@@ -24,7 +24,7 @@ from mlia.target.ethos_u.pattern_analysis import (
 class BrokenSuboptimalActivation(EthosULayerSuboptimalActivation):
     """Suboptimal activation fact that raises when accessing location."""
 
-    def __getattribute__(self, name):  # type: ignore[override]
+    def __getattribute__(self, name):
         if name == "location":
             raise AttributeError("location attribute unavailable")
         return super().__getattribute__(name)

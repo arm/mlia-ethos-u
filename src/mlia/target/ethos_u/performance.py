@@ -235,7 +235,7 @@ class VelaPerformanceEstimator(
         self.context = context
         self.target = target_config
 
-    def estimate(  # pylint: disable=attribute-defined-outside-init
+    def estimate(
         self, model: Path | ModelConfiguration
     ) -> tuple[MemoryUsage, LayerwisePerfInfo]:
         """Estimate performance."""
@@ -254,8 +254,8 @@ class VelaPerformanceEstimator(
             )
 
             # Store the raw backend metrics and compiler options for standardized output
-            self.vela_perf_metrics = vela_perf_metrics  # pylint: disable=attribute-defined-outside-init
-            self.vela_compiler_options = self.target.compiler_options  # pylint: disable=attribute-defined-outside-init
+            self.vela_perf_metrics = vela_perf_metrics
+            self.vela_compiler_options = self.target.compiler_options
 
             return (
                 MemoryUsage(
@@ -395,9 +395,7 @@ class EthosUPerformanceEstimator(
                 )
         self.backends = set(backends)
 
-    def estimate(  # pylint: disable=attribute-defined-outside-init
-        self, model: Path | ModelConfiguration
-    ) -> PerformanceMetrics:
+    def estimate(self, model: Path | ModelConfiguration) -> PerformanceMetrics:
         """Estimate performance."""
         model_path = (
             Path(model.model_path) if isinstance(model, ModelConfiguration) else model
@@ -447,7 +445,7 @@ class EthosUPerformanceEstimator(
                     if hasattr(vela_estimator, "vela_compiler_options"):
                         self.vela_compiler_options = (
                             vela_estimator.vela_compiler_options
-                        )  # pylint: disable=attribute-defined-outside-init
+                        )
             elif is_corstone_backend(backend):
                 corstone_estimator = CorstonePerformanceEstimator(
                     self.context, self.target_config, backend
@@ -468,7 +466,7 @@ class EthosUPerformanceEstimator(
         # Attach vela raw metrics object so callers can build standardized output
         # if available. We set attribute only when vela metrics were produced.
         if vela_perf_metrics is not None:
-            self.vela_perf_metrics = vela_perf_metrics  # pylint: disable=attribute-defined-outside-init
+            self.vela_perf_metrics = vela_perf_metrics
 
         # Attach corstone raw metrics object so callers can build standardized output
         # if available. We set attribute only when corstone metrics were produced.

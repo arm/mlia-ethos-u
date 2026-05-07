@@ -21,39 +21,60 @@ from mlia.target.ethos_u.utils.model_format import is_pytorch_file
 from mlia.utils.filesystem import get_vela_config
 from mlia.utils.logging import redirect_output, redirect_raw_output
 
-try:
-    from ethosu.vela.model_reader import ModelReaderOptions, read_model
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
     from ethosu.vela.nn_graph import Graph, NetworkType
-    from ethosu.vela.operation import CustomType
-    from ethosu.vela.vela import main
 
-    _VELA_AVAILABLE = True
-except ImportError:
-    from typing import TYPE_CHECKING
+logger = logging.getLogger(__name__)
 
-    if TYPE_CHECKING:
+
+@dataclass(frozen=True)
+class VelaCompilerDeps:
+    """Resolved Vela compiler dependencies."""
+
+    ModelReaderOptions: Any
+    read_model: Any
+    Graph: Any
+    NetworkType: Any
+    CustomType: Any
+    main: Any
+
+
+_VELA_DEPS_CACHE: VelaCompilerDeps | None = None
+
+
+def _load_vela_deps() -> VelaCompilerDeps:
+    """Load Vela modules on demand."""
+    try:
+        import importlib
+
+        importlib.invalidate_caches()
         from ethosu.vela.model_reader import ModelReaderOptions, read_model
         from ethosu.vela.nn_graph import Graph, NetworkType
         from ethosu.vela.operation import CustomType
         from ethosu.vela.vela import main
-    else:
+    except ImportError as exc:
+        raise BackendUnavailableError("Backend vela is not available", "vela") from exc
 
-        def __getattr__(name: str) -> Any:
-            """Raise BackendUnavailableError for Vela-related attributes."""
-            if name in {
-                "ModelReaderOptions",
-                "read_model",
-                "Graph",
-                "NetworkType",
-                "CustomType",
-                "main",
-            }:
-                raise BackendUnavailableError("Backend vela is not available", "vela")
-            raise AttributeError(name)
+    return VelaCompilerDeps(
+        ModelReaderOptions=ModelReaderOptions,
+        read_model=read_model,
+        Graph=Graph,
+        NetworkType=NetworkType,
+        CustomType=CustomType,
+        main=main,
+    )
 
-    _VELA_AVAILABLE = False
 
-logger = logging.getLogger(__name__)
+def _get_vela_deps() -> VelaCompilerDeps:
+    """Return cached Vela deps or load them."""
+    global _VELA_DEPS_CACHE
+
+    if _VELA_DEPS_CACHE is None:
+        _VELA_DEPS_CACHE = _load_vela_deps()
+    return _VELA_DEPS_CACHE
+
 
 # File extensions that Vela natively supports
 _VELA_SUPPORTED_FILE_EXTENSIONS = [".tflite", ".tosa"]
@@ -87,7 +108,7 @@ class VelaInitMemoryData:
 
 
 @dataclass
-class VelaInitData:  # pylint: disable=too-many-instance-attributes
+class VelaInitData:
     """Data gathered from the vela.ini file we provide to vela."""
 
     system_config: str
@@ -106,7 +127,7 @@ class VelaInitData:  # pylint: disable=too-many-instance-attributes
 
 
 @dataclass
-class VelaSummary:  # pylint: disable=too-many-instance-attributes
+class VelaSummary:
     """Data gathered from the summary CSV file that Vela produces."""
 
     cycles_total: float
@@ -212,8 +233,9 @@ class Model:
     @property
     def optimized(self) -> bool:
         """Return true if model is already optimized."""
+        deps = _get_vela_deps()
         return any(
-            op.attrs.get("custom_type") == CustomType.ExistingNpuOp
+            op.attrs.get("custom_type") == deps.CustomType.ExistingNpuOp
             for sg in self.nng.subgraphs
             for op in sg.get_all_ops()
         )
@@ -239,7 +261,7 @@ OptimizationStrategyType = Literal["Performance", "Size"]
 
 
 @dataclass
-class VelaCompilerOptions:  # pylint: disable=too-many-instance-attributes
+class VelaCompilerOptions:
     """Vela compiler options."""
 
     config_file: str | None = None
@@ -256,7 +278,7 @@ class VelaCompilerOptions:  # pylint: disable=too-many-instance-attributes
     verbose_performance: bool = True
 
 
-class VelaCompiler:  # pylint: disable=too-many-instance-attributes
+class VelaCompiler:
     """Vela compiler wrapper."""
 
     def __init__(self, compiler_options: VelaCompilerOptions):
@@ -363,6 +385,7 @@ class VelaCompiler:  # pylint: disable=too-many-instance-attributes
         Supports TFLite (.tflite), TOSA (.tosa), and PyTorch (.pt2) files.
         PyTorch files are automatically converted to TOSA before compilation.
         """
+        deps = _get_vela_deps()
         processed_model_path = self._preprocess_model(model_path)
 
         if not processed_model_path.is_file():
@@ -411,7 +434,7 @@ class VelaCompiler:  # pylint: disable=too-many-instance-attributes
                     if self.verbose_performance:
                         main_args.append("--verbose-performance")
                     if not already_compiled:
-                        main(main_args)
+                        deps.main(main_args)
                     optimized_model_path = Path(
                         self.output_dir.as_posix()
                         + "/"
@@ -476,11 +499,12 @@ class VelaCompiler:  # pylint: disable=too-many-instance-attributes
     def _read_model(model: str | Path) -> tuple[Graph, NetworkType]:
         """Read TensorFlow Lite model."""
         model_path = str(model) if isinstance(model, Path) else model
+        deps = _get_vela_deps()
         try:
             with redirect_output(
                 logger, stdout_level=logging.DEBUG, stderr_level=logging.DEBUG
             ):
-                return read_model(model_path, ModelReaderOptions())  # type: ignore
+                return deps.read_model(model_path, deps.ModelReaderOptions())
         except (SystemExit, Exception) as err:
             raise RuntimeError(f"Unable to read model {model_path}.") from err
 
@@ -509,9 +533,7 @@ def resolve_compiler_config(
 
 def compile_model(model_path: Path, compiler_options: VelaCompilerOptions) -> Path:
     """Compile model."""
-    # Check if Vela is available before trying to compile
-    if not _VELA_AVAILABLE:
-        raise BackendUnavailableError("Vela compiler is not available", "vela")
+    _get_vela_deps()
 
     vela_compiler = VelaCompiler(compiler_options)
     # output dir could be a path or str, cast to Path object
@@ -542,12 +564,10 @@ def parse_summary_csv_file(vela_summary_csv_file: Path) -> VelaSummary:
         except StopIteration as err:
             raise RuntimeError("Generated Vela Summary CSV is empty") from err
         try:
-            # pylint: disable=eval-used
             key_types = {
-                field.name: eval(field.type)  # type: ignore # nosec
+                field.name: eval(field.type)  # type: ignore[arg-type]
                 for field in fields(VelaSummary)
             }
-            # pylint: enable=eval-used
             summary_data = VelaSummary(
                 **{key: key_types[key](row[title]) for key, title in summary_metrics}
             )
@@ -558,7 +578,7 @@ def parse_summary_csv_file(vela_summary_csv_file: Path) -> VelaSummary:
     return summary_data
 
 
-def parse_vela_initialisation_file(  # pylint: disable=too-many-locals
+def parse_vela_initialisation_file(
     vela_init_file: Path, system_config: str, memory_mode: str
 ) -> VelaInitData:
     """Parse the vela.ini to retrieve data for the target information table."""

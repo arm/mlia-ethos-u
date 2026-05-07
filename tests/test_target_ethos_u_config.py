@@ -177,67 +177,50 @@ def test_ethosu_configuration_when_vela_unavailable(
 ) -> None:
     """Test creating Ethos-U configuration when vela unavailable."""
     from mlia.target.ethos_u import config as config_mod
+    from mlia.backend.errors import BackendUnavailableError
 
-    monkeypatch.setattr(config_mod, "_VELA_AVAILABLE", False)
+    def _missing_vela():
+        return None, None
 
     with expected_error:
+        monkeypatch.setattr(config_mod, "_load_vela", _missing_vela)
         cfg = config_mod.EthosUConfiguration(**profile_data)
         cfg.verify()
+        with pytest.raises(BackendUnavailableError):
+            _ = cfg.resolved_compiler_config
 
 
 def test_config_exposes_vela_symbols_when_backend_available() -> None:
-    """Config module should expose Vela symbols when backend is available."""
-    from mlia.backend.vela import compiler as compiler_mod
+    """Config module should resolve Vela symbols when backend is available."""
     from mlia.target.ethos_u import config as config_mod
 
-    assert config_mod._VELA_AVAILABLE is True
-    assert config_mod.VelaCompilerOptions is compiler_mod.VelaCompilerOptions
-    assert config_mod.VelaInitData is compiler_mod.VelaInitData
-    assert config_mod.resolve_compiler_config is compiler_mod.resolve_compiler_config
+    vela_compiler_options, resolve_compiler_config = config_mod._load_vela()
+    if vela_compiler_options is None or resolve_compiler_config is None:
+        pytest.skip("Vela backend is not available")
+
+    assert vela_compiler_options is not None
+    assert resolve_compiler_config is not None
 
 
 def test_config_fallback_raises_backend_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Fallback path should raise BackendUnavailableError when Vela backend is missing."""
-    import builtins
-    import importlib
-    import sys
+    from mlia.target.ethos_u import config as config_mod
 
-    modname = "mlia.target.ethos_u.config"
-    real_import = builtins.__import__
-    original_config_mod = sys.modules.get(modname)
+    def _missing_vela():
+        return None, None
 
-    def fake_import(
-        name: str,
-        globals_dict: Any | None = None,
-        locals_dict: Any | None = None,
-        fromlist: tuple[str, ...] | list[str] = (),
-        level: int = 0,
-    ):
-        if name == "mlia.backend.vela.compiler":
-            raise ImportError("Simulated missing Vela backend")
-        return real_import(name, globals_dict, locals_dict, fromlist, level)
+    monkeypatch.setattr(config_mod, "_load_vela", _missing_vela)
 
-    monkeypatch.setattr(builtins, "__import__", fake_import)
-    monkeypatch.delitem(sys.modules, modname, raising=False)
-
-    try:
-        fallback_config_mod = importlib.import_module(modname)
-        assert fallback_config_mod._VELA_AVAILABLE is False
-        with pytest.raises(BackendUnavailableError):
-            _ = fallback_config_mod.VelaCompilerOptions
-        with pytest.raises(BackendUnavailableError):
-            _ = fallback_config_mod.VelaInitData
-        with pytest.raises(BackendUnavailableError):
-            _ = fallback_config_mod.resolve_compiler_config
-        with pytest.raises(AttributeError):
-            _ = fallback_config_mod.non_existent_attribute
-    finally:
-        if original_config_mod is not None:
-            sys.modules[modname] = original_config_mod
-        else:
-            sys.modules.pop(modname, None)
+    cfg = config_mod.EthosUConfiguration(
+        target="ethos-u55",
+        mac=256,
+        system_config="Ethos_U55_High_End_Embedded",
+        memory_mode="Shared_Sram",
+    )
+    with pytest.raises(BackendUnavailableError):
+        _ = cfg.resolved_compiler_config
 
 
 @pytest.mark.parametrize(

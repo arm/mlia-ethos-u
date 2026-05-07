@@ -14,35 +14,41 @@ from typing import TYPE_CHECKING, Any
 
 from mlia.backend.errors import BackendUnavailableError
 
-try:
-    from ethosu.vela import __version__ as ethosu_vela_version
-
-    _VELA_AVAILABLE = True
-except ImportError:
-    if TYPE_CHECKING:
-        from ethosu.vela import __version__ as ethosu_vela_version
-    else:
-
-        def __getattr__(name: str) -> Any:
-            """Raise BackendUnavailableError for Vela-related attributes."""
-            if name in {
-                "ethosu_vela_version",
-            }:
-                raise BackendUnavailableError("Backend vela is not available", "vela")
-            raise AttributeError(name)
-
-    _VELA_AVAILABLE = False
+if TYPE_CHECKING:
+    from mlia.backend.vela.compiler import VelaCompilerOptions, VelaSummary
 
 import mlia
 import mlia.core.output_schema as schema
-from mlia.backend.vela.compiler import VelaCompiler, VelaCompilerOptions, VelaSummary
 from mlia.utils.filesystem import sha256
 
 logger = logging.getLogger(__name__)
 
+_VELA_VERSION_CACHE: str | None = None
+
+
+def _load_vela_version() -> str:
+    """Load Vela version on demand."""
+    try:
+        import importlib
+
+        importlib.invalidate_caches()
+        from ethosu.vela import __version__ as ethosu_vela_version
+    except ImportError as exc:
+        raise BackendUnavailableError("Backend vela is not available", "vela") from exc
+    return ethosu_vela_version
+
+
+def _get_vela_version() -> str:
+    """Return cached Vela version or load it."""
+    global _VELA_VERSION_CACHE
+
+    if _VELA_VERSION_CACHE is None:
+        _VELA_VERSION_CACHE = _load_vela_version()
+    return _VELA_VERSION_CACHE
+
 
 @dataclass
-class PerformanceMetrics:  # pylint: disable=too-many-instance-attributes
+class PerformanceMetrics:
     """Contains all the performance metrics Vela generates in a run."""
 
     npu_cycles: int
@@ -60,7 +66,7 @@ class PerformanceMetrics:  # pylint: disable=too-many-instance-attributes
     off_chip_flash_memory_area_size: float
     layerwise_performance_info: LayerwisePerfInfo
 
-    def to_standardized_output(  # pylint: disable=too-many-locals
+    def to_standardized_output(
         self,
         model_path: Path,
         target_config: dict[str, Any] | None = None,
@@ -82,7 +88,6 @@ class PerformanceMetrics:  # pylint: disable=too-many-instance-attributes
         Returns:
             Standardized output dictionary
         """
-        # pylint: disable=duplicate-code
         # Generate run_id and timestamp if not provided
         if run_id is None:
             run_id = schema.StandardizedOutput.create_run_id()
@@ -94,8 +99,8 @@ class PerformanceMetrics:  # pylint: disable=too-many-instance-attributes
 
         # Create backend with version
         try:
-            backend_version = ethosu_vela_version
-        except Exception as exc:  # pylint: disable=broad-exception-caught
+            backend_version = _get_vela_version()
+        except Exception as exc:
             logger.warning("Failed to get vela version: %s", exc)
             backend_version = "unknown"
 
@@ -276,7 +281,7 @@ class PerformanceMetrics:  # pylint: disable=too-many-instance-attributes
 
 
 @dataclass
-class LayerPerfInfo:  # pylint: disable=too-many-instance-attributes
+class LayerPerfInfo:
     """Contains metrics from a row from the per-layer csv file from Vela."""
 
     name: str
@@ -357,9 +362,7 @@ def extract_metrics_from_row(row_as_dict: dict, metrics: list, key_types: dict) 
     return ids_to_metrics
 
 
-def parse_layerwise_perf_csv(  # pylint: disable=too-many-locals
-    vela_csv_file: Path, metrics: list
-) -> LayerwisePerfInfo:
+def parse_layerwise_perf_csv(vela_csv_file: Path, metrics: list) -> LayerwisePerfInfo:
     """Parse the per-layer csv file from backend vela."""
     if not vela_csv_file.is_file():
         raise FileNotFoundError(f"CSV File not found at {vela_csv_file}\n")
@@ -387,12 +390,10 @@ def parse_layerwise_perf_csv(  # pylint: disable=too-many-locals
             if row == headers_to_check_cpu_ops:
                 continue
             try:
-                # pylint: disable=eval-used
                 key_types = {
-                    field.name: eval(field.type)  # type: ignore # nosec
+                    field.name: eval(field.type)  # type: ignore[arg-type]
                     for field in fields(LayerPerfInfo)
                 }
-                # pylint: enable=eval-used
                 ids_to_metrics = extract_metrics_from_row(
                     row_as_dict, metrics, key_types
                 )
@@ -414,6 +415,8 @@ def estimate_performance(
         model_path,
         compiler_options.accelerator_config,
     )
+    from mlia.backend.vela.compiler import VelaCompiler
+
     vela_compiler = VelaCompiler(compiler_options)
     if Path(
         Path(compiler_options.output_dir).as_posix()
