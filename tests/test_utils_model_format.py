@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from mlia.target.ethos_u.utils.model_format import (
+    is_pte_file,
     is_pytorch_file,
     is_supported_pytorch_extension,
     is_tosa_file,
@@ -21,6 +22,7 @@ from mlia.target.ethos_u.utils.model_format import (
         (Path("model.TOSA"), True),
         (Path("model.tflite"), False),
         (Path("model.pt2"), False),
+        (Path("model.pte"), False),
     ],
 )
 def test_is_tosa_file(model_path: Path, expected: bool) -> None:
@@ -33,6 +35,8 @@ def test_is_tosa_file(model_path: Path, expected: bool) -> None:
     [
         (Path("model.pt2"), True),
         (Path("model.PT2"), True),
+        (Path("model.pte"), False),
+        (Path("model.PTE"), False),
         (Path("model.tosa"), False),
         (Path("model.tflite"), False),
     ],
@@ -46,6 +50,7 @@ def test_is_supported_pytorch_extension(model_path: Path, expected: bool) -> Non
     "model_path, expected",
     [
         (Path("missing_model.pt2"), True),
+        (Path("missing_model.pte"), False),
         (Path("missing_model.tosa"), False),
         (Path("missing_model.tflite"), False),
     ],
@@ -53,3 +58,19 @@ def test_is_supported_pytorch_extension(model_path: Path, expected: bool) -> Non
 def test_is_pytorch_file_is_predicate(model_path: Path, expected: bool) -> None:
     """Test is_pytorch_file behaves as a suffix predicate and never validates path existence."""
     assert is_pytorch_file(model_path) is expected
+
+
+@pytest.mark.parametrize(
+    "model_path, expected",
+    [
+        (Path("model.pte"), True),
+        (Path("model.PTE"), True),
+        (Path("missing_model.pte"), True),
+        (Path("model.pt2"), False),
+        (Path("model.tosa"), False),
+        (Path("model.tflite"), False),
+    ],
+)
+def test_is_pte_file_is_predicate(model_path: Path, expected: bool) -> None:
+    """Test ExecuTorch extension predicate."""
+    assert is_pte_file(model_path) is expected

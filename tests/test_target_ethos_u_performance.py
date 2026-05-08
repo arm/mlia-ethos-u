@@ -9,6 +9,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from mlia.backend.errors import BackendUnavailableError
+from mlia.core.errors import ConfigurationError
+from mlia.target.ethos_u.config import EthosUConfiguration
 from mlia.target.ethos_u.performance import (
     CorstonePerformanceEstimator,
     EthosUPerformanceEstimator,
@@ -222,6 +224,23 @@ def test_corstone_performance_estimator_estimate_uses_compiler_and_backend(
     assert estimator.backend_metrics is corstone_metrics
 
 
+def test_corstone_performance_estimator_prepares_pte_without_conversion(
+    sample_context, tmp_path: Path
+) -> None:
+    """ExecuTorch model files are already runner-ready artifacts."""
+    target_cfg = EthosUConfiguration.load_profile("ethos-u55-256")
+    estimator = CorstonePerformanceEstimator(
+        sample_context, target_cfg, backend="corstone-300"
+    )
+
+    model_path = tmp_path / "model.pte"
+    model_path.write_text("mock executorch model")
+
+    assert (
+        estimator._prepare_executorch_model(model_path) == model_path  # pylint: disable=protected-access
+    )
+
+
 def test_ethosu_performance_estimator_rejects_unsupported_backend(
     sample_context, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -250,6 +269,37 @@ def test_ethosu_performance_estimator_uses_default_vela_backend(
 
     estimator = EthosUPerformanceEstimator(sample_context, target_cfg)
     assert estimator.backends == {"vela"}
+
+
+def test_ethosu_performance_estimator_rejects_pte_with_vela(
+    sample_context, tmp_path: Path
+) -> None:
+    """ExecuTorch performance is restricted to Corstone backends."""
+    target_cfg = EthosUConfiguration.load_profile("ethos-u55-256")
+    model_path = tmp_path / "model.pte"
+    model_path.write_text("mock executorch model")
+
+    estimator = EthosUPerformanceEstimator(
+        sample_context, target_cfg, backends=["vela"]
+    )
+
+    with pytest.raises(ConfigurationError, match="Corstone backends"):
+        estimator.estimate(model_path)
+
+
+def test_ethosu_performance_estimator_rejects_pte_without_backend(
+    sample_context, tmp_path: Path
+) -> None:
+    """Default backend selection is still Vela and rejects ExecuTorch files."""
+    target_cfg = EthosUConfiguration.load_profile("ethos-u55-256")
+    model_path = tmp_path / "model.pte"
+    model_path.write_text("mock executorch model")
+
+    estimator = EthosUPerformanceEstimator(sample_context, target_cfg)
+
+    assert estimator.backends == {"vela"}
+    with pytest.raises(ConfigurationError, match="Corstone backends"):
+        estimator.estimate(model_path)
 
 
 def test_ethosu_performance_estimator_estimate_combines_backends(

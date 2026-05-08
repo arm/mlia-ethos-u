@@ -386,6 +386,8 @@ class EthosUPerformanceEstimator(
         if backends is None:
             backends = ["vela"]  # Only Vela is always available as default
         ethos_u_backends = supported_backends(target_config.target)
+        if not backends:
+            raise ConfigurationError("No performance backends were configured.")
         for backend in backends:
             if backend != "vela" and backend not in ethos_u_backends:
                 raise ValueError(
@@ -411,6 +413,13 @@ class EthosUPerformanceEstimator(
         ):
             raise ConfigurationError(
                 "Input must be a TFLite, TOSA, ExecuTorch .pte or PyTorch .pt2 file."
+            )
+
+        if is_pte_file(model_path) and any(
+            not is_corstone_backend(backend) for backend in self.backends
+        ):
+            raise ConfigurationError(
+                "ExecuTorch .pte performance is only supported with Corstone backends."
             )
 
         model_to_estimate: Path | ModelConfiguration

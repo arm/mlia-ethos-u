@@ -413,6 +413,22 @@ def test_operator_compatibility_tosa_model(
     assert isinstance(result, VelaCompatibilityResult)
 
 
+def test_operator_compatibility_pte_model_is_not_supported(
+    sample_context: Context, tmp_path: Path
+) -> None:
+    """Test operator compatibility rejects ExecuTorch models."""
+    target = EthosUConfiguration.load_profile("ethos-u55-256")
+
+    pte_model = tmp_path / "model.pte"
+    pte_model.write_text("mock executorch model")
+
+    collector = EthosUOperatorCompatibility(pte_model, target)
+    collector.set_context(sample_context)
+
+    with pytest.raises(ConfigurationError, match="ExecuTorch .pte"):
+        collector.collect_data()
+
+
 def test_performance_collector_pytorch_model(
     monkeypatch: pytest.MonkeyPatch, sample_context: Context, tmp_path: Path
 ) -> None:
@@ -442,6 +458,21 @@ def test_performance_collector_pytorch_model(
 
     result = collector.collect_data()
     assert isinstance(result, PerformanceMetrics)
+
+
+def test_performance_collector_pte_rejects_unsupported_default_target(
+    sample_context: Context, tmp_path: Path
+) -> None:
+    """Test ExecuTorch performance rejects targets without a default runner."""
+    target = EthosUConfiguration.load_profile("ethos-u65-256")
+    pte_model = tmp_path / "model.pte"
+    pte_model.write_text("mock executorch model")
+
+    collector = EthosUPerformance(pte_model, target)
+    collector.set_context(sample_context)
+
+    with pytest.raises(ConfigurationError, match="not supported for target"):
+        collector.collect_data()
 
 
 def test_performance_collector_pytorch_with_corstone_backend(
