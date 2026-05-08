@@ -102,6 +102,12 @@ def wrap_mock_command(mock: MagicMock, command: Callable) -> Callable:
     return mock_command
 
 
+DEFAULT_AUTO_INSTALL_ARGS = {
+    "i_agree_to_the_contained_eula": False,
+    "noninteractive": False,
+}
+
+
 @pytest.mark.parametrize(
     "params, expected_call",
     [
@@ -114,6 +120,7 @@ def wrap_mock_command(mock: MagicMock, command: Callable) -> Callable:
                 compatibility=False,
                 performance=False,
                 backend=None,
+                **DEFAULT_AUTO_INSTALL_ARGS,
             ),
         ],
         [
@@ -125,6 +132,7 @@ def wrap_mock_command(mock: MagicMock, command: Callable) -> Callable:
                 compatibility=False,
                 performance=False,
                 backend=None,
+                **DEFAULT_AUTO_INSTALL_ARGS,
             ),
         ],
         [
@@ -143,6 +151,7 @@ def wrap_mock_command(mock: MagicMock, command: Callable) -> Callable:
                 compatibility=True,
                 performance=True,
                 backend=None,
+                **DEFAULT_AUTO_INSTALL_ARGS,
             ),
         ],
         [
@@ -160,6 +169,7 @@ def wrap_mock_command(mock: MagicMock, command: Callable) -> Callable:
                 performance=True,
                 compatibility=False,
                 backend=None,
+                **DEFAULT_AUTO_INSTALL_ARGS,
             ),
         ],
         [
@@ -177,6 +187,7 @@ def wrap_mock_command(mock: MagicMock, command: Callable) -> Callable:
                 compatibility=False,
                 performance=True,
                 backend=None,
+                **DEFAULT_AUTO_INSTALL_ARGS,
             ),
         ],
         [
@@ -194,6 +205,7 @@ def wrap_mock_command(mock: MagicMock, command: Callable) -> Callable:
                 compatibility=True,
                 performance=False,
                 backend=None,
+                **DEFAULT_AUTO_INSTALL_ARGS,
             ),
         ],
     ],
@@ -205,7 +217,7 @@ def test_commands_execution(
     mock = MagicMock()
 
     monkeypatch.setattr(
-        "mlia.cli.options.get_available_backends",
+        "mlia.cli.options.get_selectable_backends",
         MagicMock(return_value=["vela", "some_backend"]),
     )
 

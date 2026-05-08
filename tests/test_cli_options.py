@@ -224,7 +224,7 @@ def test_add_backend_options() -> None:
     """Test add_backend_options adds backend argument."""
     parser = argparse.ArgumentParser()
 
-    with patch("mlia.cli.options.get_available_backends") as mock_backends:
+    with patch("mlia.cli.options.get_selectable_backends") as mock_backends:
         mock_backends.return_value = ["vela", "tosa-checker", "corstone-300"]
         add_backend_options(parser)
 
@@ -239,7 +239,7 @@ def test_add_backend_options_multiple_corstone_error() -> None:
     """Test add_backend_options rejects multiple Corstone backends."""
     parser = argparse.ArgumentParser()
 
-    with patch("mlia.cli.options.get_available_backends") as mock_backends:
+    with patch("mlia.cli.options.get_selectable_backends") as mock_backends:
         mock_backends.return_value = ["corstone-300", "corstone-310"]
         add_backend_options(parser)
 
@@ -253,7 +253,7 @@ def test_add_backend_options_with_skip_list() -> None:
     """Test add_backend_options with backends_to_skip."""
     parser = argparse.ArgumentParser()
 
-    with patch("mlia.cli.options.get_available_backends") as mock_backends:
+    with patch("mlia.cli.options.get_selectable_backends") as mock_backends:
         mock_backends.return_value = ["vela", "tosa-checker", "corstone-300"]
         add_backend_options(parser, backends_to_skip=["tosa-checker"])
 

@@ -179,9 +179,6 @@ def test_check_category_combinations(
 
     # Mock validators
     monkeypatch.setattr("mlia.cli.commands.validate_check_target_profile", MagicMock())
-    monkeypatch.setattr(
-        "mlia.cli.commands.validate_backend", MagicMock(return_value=None)
-    )
 
     check(
         sample_context,

@@ -58,34 +58,38 @@ def test_validate_check_target_profile(
         "output_backends",
     ),
     [
-        [
+        pytest.param(
             "ethos-u85-1024",
             ["corstone-320"],
             False,
             None,
             ["corstone-320"],
-        ],
-        [
+            id="u85-allows-corstone-320",
+        ),
+        pytest.param(
             "ethos-u55-256",
             ["corstone-320"],
             True,
             "Backend corstone-320 not supported with target-profile ethos-u55-256.",
             None,
-        ],
-        [
+            id="u55-rejects-corstone-320",
+        ),
+        pytest.param(
             "ethos-u55-256",
-            ["vela", "corstone-310"],
+            ["VELA", "Corstone-310"],
             False,
             None,
             ["vela", "corstone-310"],
-        ],
-        [
+            id="u55-normalizes-backend-names",
+        ),
+        pytest.param(
             "ethos-u65-256",
             ["vela", "corstone-310"],
             False,
             None,
             ["vela", "corstone-310"],
-        ],
+            id="u65-allows-vela-and-corstone-310",
+        ),
     ],
 )
 def test_validate_backend(
@@ -106,16 +110,15 @@ def test_validate_backend(
         assert validate_backend(input_target_profile, input_backends) == output_backends
 
 
-def test_validate_backend_default_unavailable(
+def test_validate_backend_returns_configured_defaults(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Test default backend validation with unavailable backend."""
+    """Test default backend validation returns configured defaults."""
     monkeypatch.setattr(
         "mlia.cli.command_validators.default_backends",
         MagicMock(return_value=["UNKNOWN_BACKEND"]),
     )
-    with pytest.raises(argparse.ArgumentError):
-        validate_backend("ethos-u55-256", None)
+    assert validate_backend("ethos-u55-256", None) == ["UNKNOWN_BACKEND"]
 
 
 @pytest.mark.parametrize(
@@ -144,7 +147,7 @@ def test_normalize_string(input_string: str, expected_output: str) -> None:
             "ethos-u55",
             "ethos-u55-256",
             ["VELA", "corstone-310"],
-            ["VELA", "corstone-310"],
+            ["Vela", "Corstone-310"],
         ),
     ],
     ids=["case_insensitive"],
