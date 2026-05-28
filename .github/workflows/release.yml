@@ -9,6 +9,7 @@ on:
       - main
     tags:
       - "v*.*.*"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -204,3 +205,13 @@ jobs:
           UV_PUBLISH_URL: ${{ secrets.PUBLISH_PYPI_HOST }}
           UV_PUBLISH_USERNAME: ${{ secrets.INTERNAL_PYPI_USERNAME || secrets.PUBLISH_PYPI_USERNAME }}
           UV_PUBLISH_PASSWORD: ${{ secrets.INTERNAL_PYPI_PASSWORD || secrets.PUBLISH_PYPI_PASSWORD }}
+
+  sync_to_public_repo:
+    needs:
+      - build_and_test_wheel
+      - test_e2e
+    if: ${{ github.event.repository.private }}
+    uses: Arm-Debug/github-workflow-wizardry/.github/workflows/sync-to-public-repo.yml@main
+    with:
+      public_repo: arm/mlia-ethos-u
+    secrets: inherit
