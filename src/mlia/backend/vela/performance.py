@@ -26,6 +26,30 @@ logger = logging.getLogger(__name__)
 _VELA_VERSION_CACHE: str | None = None
 
 
+def _average_memory_usage(layerwise_info: LayerwisePerfInfo) -> float | None:
+    """Return per-layer memory usage weighted by operation cycles."""
+    total_cycles = sum(layer.op_cycles for layer in layerwise_info.layerwise_info)
+    if total_cycles < 0:
+        raise ValueError(
+            f"Layer operation cycles must not sum to a negative value: {total_cycles}"
+        )
+    if total_cycles == 0:
+        return None
+
+    weighted_memory_usage = sum(
+        layer.sram_usage * layer.op_cycles for layer in layerwise_info.layerwise_info
+    )
+    return weighted_memory_usage / total_cycles
+
+
+def _peak_memory_usage(layerwise_info: LayerwisePerfInfo) -> int | None:
+    """Return the highest per-layer memory usage."""
+    memory_values = [layer.sram_usage for layer in layerwise_info.layerwise_info]
+    if not memory_values:
+        return None
+    return max(memory_values)
+
+
 def _load_vela_version() -> str:
     """Load Vela version on demand."""
     try:
@@ -142,7 +166,7 @@ class PerformanceMetrics:
         context = schema.Context(cli_arguments=cli_arguments or [])
 
         # Create performance metrics
-        metrics = [
+        model_metrics = [
             schema.Metric(name="npu_cycles", value=self.npu_cycles, unit="cycles"),
             schema.Metric(
                 name="sram_access_cycles", value=self.sram_access_cycles, unit="cycles"
@@ -167,9 +191,18 @@ class PerformanceMetrics:
                 unit="seconds",
             ),
             schema.Metric(
-                name="inferences_per_second",
+                name=schema.METRIC_NAME_INFERENCES_PER_SECOND,
                 value=self.inferences_per_second,
-                unit="inferences/s",
+                unit=schema.UNIT_INFERENCES_PER_SECOND,
+            ),
+            schema.Metric(
+                name=schema.METRIC_NAME_TARGET_UTILIZATION,
+                value=(
+                    (self.npu_cycles / self.total_cycles) * 100
+                    if self.total_cycles
+                    else 0.0
+                ),
+                unit=schema.UNIT_PERCENT,
             ),
             schema.Metric(name="batch_size", value=self.batch_size, unit="count"),
             schema.Metric(
@@ -196,10 +229,29 @@ class PerformanceMetrics:
                 unit="bytes",
             ),
         ]
+        peak_memory_usage = _peak_memory_usage(self.layerwise_performance_info)
+        if peak_memory_usage is not None:
+            model_metrics.append(
+                schema.Metric(
+                    name=schema.METRIC_NAME_PEAK_ACTIVATION_MEMORY,
+                    value=peak_memory_usage,
+                    unit=schema.UNIT_BYTES,
+                )
+            )
+        average_memory_usage = _average_memory_usage(self.layerwise_performance_info)
+        if average_memory_usage is not None:
+            model_metrics.append(
+                schema.Metric(
+                    name=schema.METRIC_NAME_AVERAGE_MEMORY,
+                    value=average_memory_usage,
+                    unit=schema.UNIT_BYTES,
+                )
+            )
+        model_metrics = schema.ensure_standard_performance_metrics(model_metrics)
 
         breakdowns = []
         for layer_info in self.layerwise_performance_info.layerwise_info:
-            metrics = [
+            breakdown_metrics = [
                 schema.Metric(
                     name="op_cycles",
                     value=layer_info.op_cycles,
@@ -251,7 +303,7 @@ class PerformanceMetrics:
                     scope=schema.OperatorScope.OPERATOR,
                     name=layer_info.tflite_operator,
                     location=layer_info.name,
-                    metrics=metrics,
+                    metrics=breakdown_metrics,
                 )
             )
 
@@ -260,7 +312,7 @@ class PerformanceMetrics:
             kind=schema.ResultKind.PERFORMANCE,
             status=schema.ResultStatus.OK,
             producer="vela",
-            metrics=metrics,
+            metrics=model_metrics,
             breakdowns=breakdowns,
         )
 
@@ -397,7 +449,13 @@ def parse_layerwise_perf_csv(vela_csv_file: Path, metrics: list) -> LayerwisePer
                 ids_to_metrics = extract_metrics_from_row(
                     row_as_dict, metrics, key_types
                 )
-                layerwise_info.append(LayerPerfInfo(**ids_to_metrics))
+                layer_info = LayerPerfInfo(**ids_to_metrics)
+                if layer_info.op_cycles < 0:
+                    raise ValueError(
+                        "Vela per-layer CSV contains negative op_cycles "
+                        f"for layer {layer_info.name!r}: {layer_info.op_cycles}"
+                    )
+                layerwise_info.append(layer_info)
             except KeyError as err:
                 raise KeyError("Generated CSV missing expected headers") from err
     return LayerwisePerfInfo(layerwise_info=layerwise_info)

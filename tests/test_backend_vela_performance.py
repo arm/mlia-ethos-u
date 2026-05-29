@@ -4,6 +4,7 @@
 
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -18,8 +19,9 @@ else:
     # Only reference ethosu.vela if it was successfully imported
     _ = ethosu.vela
 
-from typing import TypedDict, get_type_hints
+from typing import Any, TypedDict, get_type_hints
 
+import mlia.core.output_schema as schema
 from mlia.backend.vela.compiler import (
     VelaSummary,
     compile_model,  # noqa: E402
@@ -32,6 +34,7 @@ from mlia.backend.vela.performance import (
     layer_metrics,  # noqa: E402
     parse_layerwise_perf_csv,  # noqa: E402
 )
+from mlia.core.output_validation import validate_standardized_output  # noqa: E402
 from mlia.target.ethos_u.config import EthosUConfiguration  # noqa: E402
 from mlia.utils.filesystem import recreate_directory  # noqa: E402
 
@@ -105,6 +108,11 @@ MAX_POOL_2D,MaxPool,10944,50.10989010989011,2992.0,7.22147132651091,1330.0,2992.
 LAYERWISE_BAD_NUM_VALUE_DATA_STR = """
 TFLite_operator,NNG Operator,SRAM Usage,Peak%,Op Cycles,Network%,NPU,SRAM AC,DRAM AC,OnFlash AC,OffFlash AC,MAC Count,Network%,Util%,Name
 CONV_2D,Conv2DBias,11936,54.65201465201465,7312.0,17.648194632168373,7312.0,2000.0,0.0,0.0,0.0,73008,8.653353814644136,bad_float,sequential/conv1/Relu;sequential/conv1/Conv2D
+""".strip()  # noqa: E501
+
+LAYERWISE_NEGATIVE_OP_CYCLES_DATA_STR = """
+TFLite_operator,NNG Operator,SRAM Usage,Peak%,Op Cycles,Network%,NPU,SRAM AC,DRAM AC,OnFlash AC,OffFlash AC,MAC Count,Network%,Util%,Name
+CONV_2D,Conv2DBias,11936,54.65201465201465,-1.0,17.648194632168373,7312.0,2000.0,0.0,0.0,0.0,73008,8.653353814644136,3.9002666849015313,sequential/conv1/Relu;sequential/conv1/Conv2D
 """.strip()  # noqa: E501
 
 LAYERWISE_MIXED_ALIAS_TMP_DATA_STR = """
@@ -233,6 +241,17 @@ def test_estimate_performance_parse_layerwise_csv_file_invalid_number(
         parse_layerwise_perf_csv(test_csv_file, layer_metrics)
 
 
+def test_estimate_performance_parse_layerwise_csv_file_negative_op_cycles(
+    test_csv_file: Path,
+) -> None:
+    """Test if ValueError is raised if op_cycles is negative."""
+    with open(test_csv_file, "w", encoding="utf8") as csv_file:
+        csv_file.write(LAYERWISE_NEGATIVE_OP_CYCLES_DATA_STR)
+
+    with pytest.raises(ValueError, match="negative op_cycles"):
+        parse_layerwise_perf_csv(test_csv_file, layer_metrics)
+
+
 def test_estimate_performance_parse_layerwise_empty_csv_file(
     empty_test_csv_file: Path,
 ) -> None:
@@ -270,7 +289,7 @@ def test_no_csv_file_found(
     mock_vela_compiler.compile_model.return_value = (VelaSummary, test_tflite_model)
     mock_vela_compiler_class = MagicMock(return_value=mock_vela_compiler)
     monkeypatch.setattr(
-        "mlia.backend.vela.performance.VelaCompiler",
+        "mlia.backend.vela.compiler.VelaCompiler",
         mock_vela_compiler_class,
     )
 
@@ -294,7 +313,10 @@ def test_compile_invalid_model(
     mock_compiler = MagicMock()
     mock_compiler.side_effect = Exception("Bad model!")
 
-    monkeypatch.setattr("mlia.backend.vela.compiler.main", mock_compiler)
+    monkeypatch.setattr(
+        "mlia.backend.vela.compiler._get_vela_deps",
+        MagicMock(return_value=SimpleNamespace(main=mock_compiler)),
+    )
 
     model_path = tmp_path / "optimized_model.tflite"
     with pytest.raises(
@@ -375,11 +397,11 @@ def test_to_standardized_output(
         "mlia.core.output_schema.StandardizedOutput.create_timestamp",
         MagicMock(return_value="fake_timestamp"),
     )
-    monkeypatch.setattr("mlia.core.output_schema.SCHEMA_VERSION", "1.0.0")
+    monkeypatch.setattr("mlia.core.output_schema.SCHEMA_VERSION", "1.1.0")
 
     standardized_output = perf_metrics.to_standardized_output(test_tflite_model)
 
-    assert standardized_output["schema_version"] == "1.0.0"
+    assert standardized_output["schema_version"] == "1.1.0"
     assert standardized_output["run_id"] == "fake_id"
     assert standardized_output["timestamp"] == "fake_timestamp"
     assert standardized_output["tool"] == {
@@ -405,6 +427,41 @@ def test_to_standardized_output(
     ]
     assert len(standardized_output["results"]) == 1
     results = standardized_output["results"][0]
+    result_metrics = {metric["name"]: metric for metric in results["metrics"]}
+    assert result_metrics["npu_cycles"] == {
+        "name": "npu_cycles",
+        "value": 10304,
+        "unit": "cycles",
+    }
+    assert result_metrics[schema.METRIC_NAME_INFERENCES_PER_SECOND] == {
+        "name": schema.METRIC_NAME_INFERENCES_PER_SECOND,
+        "value": 4830.9,
+        "unit": schema.UNIT_INFERENCES_PER_SECOND,
+    }
+    assert result_metrics[schema.METRIC_NAME_TARGET_UTILIZATION] == {
+        "name": schema.METRIC_NAME_TARGET_UTILIZATION,
+        "value": pytest.approx((10304 / 41416) * 100),
+        "unit": schema.UNIT_PERCENT,
+    }
+    assert result_metrics[schema.METRIC_NAME_PEAK_ACTIVATION_MEMORY] == {
+        "name": schema.METRIC_NAME_PEAK_ACTIVATION_MEMORY,
+        "value": 11936,
+        "unit": schema.UNIT_BYTES,
+    }
+    assert result_metrics[schema.METRIC_NAME_AVERAGE_MEMORY] == {
+        "name": schema.METRIC_NAME_AVERAGE_MEMORY,
+        "value": pytest.approx(((11936 * 7312) + (10944 * 2992)) / (7312 + 2992)),
+        "unit": schema.UNIT_BYTES,
+    }
+    for unavailable_metric in [
+        schema.METRIC_NAME_ACCELERATOR_OPERATOR_PERCENTAGE,
+        schema.METRIC_NAME_CPU_UTILIZATION,
+    ]:
+        metric = result_metrics[unavailable_metric]
+        assert metric["availability"] == "unavailable"
+        assert "value" not in metric
+        assert metric["reason"]
+
     assert len(results["breakdowns"]) == 2
     breakdowns = results["breakdowns"]
 
@@ -492,6 +549,71 @@ def test_to_standardized_output(
         metrics = {m["name"]: m for m in breakdowns[i]["metrics"]}
         for metric_name, expected_metric in expected["metrics"].items():
             assert metrics[metric_name] == expected_metric
+
+
+def test_to_standardized_output_validates_against_schema(
+    test_tflite_model: Path,
+) -> None:
+    """Test Vela performance output against the MLIA output schema."""
+    perf_metrics = _get_perf_metrics()
+
+    standardized_output = perf_metrics.to_standardized_output(test_tflite_model)
+
+    validate_standardized_output(standardized_output)
+
+
+def test_to_standardized_output_reports_zero_target_utilization(
+    test_tflite_model: Path,
+) -> None:
+    """Test target utilization when total cycles are unavailable."""
+    perf_metrics = _get_perf_metrics()
+    perf_metrics.total_cycles = 0
+
+    standardized_output = perf_metrics.to_standardized_output(test_tflite_model)
+
+    result_metrics: dict[str, dict[str, Any]] = {
+        metric["name"]: metric
+        for metric in standardized_output["results"][0]["metrics"]
+    }
+    assert result_metrics[schema.METRIC_NAME_TARGET_UTILIZATION] == {
+        "name": schema.METRIC_NAME_TARGET_UTILIZATION,
+        "value": 0.0,
+        "unit": schema.UNIT_PERCENT,
+    }
+
+
+def test_to_standardized_output_marks_memory_metrics_unavailable_without_layers(
+    test_tflite_model: Path,
+) -> None:
+    """Test memory metric availability when per-layer source data is absent."""
+    perf_metrics = _get_perf_metrics()
+    perf_metrics.layerwise_performance_info = LayerwisePerfInfo(layerwise_info=[])
+
+    standardized_output = perf_metrics.to_standardized_output(test_tflite_model)
+
+    result_metrics: dict[str, dict[str, Any]] = {
+        metric["name"]: metric
+        for metric in standardized_output["results"][0]["metrics"]
+    }
+    for metric_name in (
+        schema.METRIC_NAME_PEAK_ACTIVATION_MEMORY,
+        schema.METRIC_NAME_AVERAGE_MEMORY,
+    ):
+        metric = result_metrics[metric_name]
+        assert metric["availability"] == "unavailable"
+        assert "value" not in metric
+        assert metric["reason"]
+
+
+def test_to_standardized_output_rejects_negative_total_layer_op_cycles(
+    test_tflite_model: Path,
+) -> None:
+    """Test the internal invariant for average memory weighting."""
+    perf_metrics = _get_perf_metrics()
+    perf_metrics.layerwise_performance_info.layerwise_info[0].op_cycles = -20_000
+
+    with pytest.raises(ValueError, match="negative value"):
+        perf_metrics.to_standardized_output(test_tflite_model)
 
 
 def test_to_standarized_output_kwargs(test_tflite_model: Path) -> None:
