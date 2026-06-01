@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from functools import wraps
 from pathlib import Path
 from typing import Any, Callable
@@ -37,10 +38,20 @@ def teardown_function() -> None:
     clear_loggers()
 
 
-def test_option_version(capfd: pytest.CaptureFixture) -> None:
+def run_cli(
+    monkeypatch: pytest.MonkeyPatch, entrypoint: Callable[[], int], params: list[Any]
+) -> int:
+    """Run a CLI entrypoint with test arguments."""
+    monkeypatch.setattr(sys, "argv", ["mlia", *[str(param) for param in params]])
+    return entrypoint()
+
+
+def test_option_version(
+    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture
+) -> None:
     """Test --version."""
     with pytest.raises(SystemExit) as ex:
-        main(["--version"])
+        run_cli(monkeypatch, main, ["--version"])
 
     assert ex.value.code == 0
 
@@ -227,7 +238,7 @@ def test_commands_execution(
             wrap_mock_command(mock, getattr(mlia_cli_main, command)),
         )
 
-    main(params)
+    run_cli(monkeypatch, main, params)
 
     mock.assert_called_once_with(*expected_call.args, **expected_call.kwargs)
 
@@ -249,7 +260,7 @@ def test_passing_output_directory_parameter(
     )
 
     output_dir = tmp_path / "output"
-    main(["sample_command", "--output-dir", output_dir.as_posix()])
+    run_cli(monkeypatch, main, ["sample_command", "--output-dir", output_dir])
 
     assert isinstance(passed_context, ExecutionContext)
     assert passed_context.output_dir == output_dir / "mlia-output"
@@ -277,7 +288,7 @@ def test_commands_execution_backend_main(
         wrap_mock_command(mock, mlia_cli_main.backend_list),
     )
 
-    backend_main(params)
+    run_cli(monkeypatch, backend_main, params)
 
     mock.assert_called_once_with(*expected_call.args, **expected_call.kwargs)
 
@@ -301,7 +312,7 @@ def test_commands_execution_target_main(
         wrap_mock_command(mock, mlia.cli.commands.target_list),
     )
 
-    target_main(params)
+    run_cli(monkeypatch, target_main, params)
 
     mock.assert_called_once_with(*expected_call.args, **expected_call.kwargs)
 
@@ -408,7 +419,7 @@ def test_debug_output(
     if debug:
         params.append("--debug")
 
-    exit_code = main(params)
+    exit_code = run_cli(monkeypatch, main, params)
     assert exit_code == 1
 
     stdout, _ = capsys.readouterr()
@@ -451,7 +462,7 @@ def test_setup_context_exception_handling(
     )
 
     with pytest.raises(SystemExit) as ex:
-        main(["sample_command"])
+        run_cli(monkeypatch, main, ["sample_command"])
 
     assert ex.value.code == 1
     stdout, stderr = capsys.readouterr()
@@ -474,7 +485,7 @@ def test_run_command_configuration_error(
         mlia_cli_main, "get_commands", lambda: [CommandInfo(sample_command, [], [])]
     )
 
-    exit_code = main(["sample_command"])
+    exit_code = run_cli(monkeypatch, main, ["sample_command"])
 
     assert exit_code == 1
     stdout, _ = capsys.readouterr()

@@ -3,8 +3,9 @@
 """Tests for module vela/performance."""
 
 import tempfile
+from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
+from typing import Any, TypedDict, get_type_hints
 from unittest.mock import MagicMock
 
 import pytest
@@ -19,8 +20,7 @@ else:
     # Only reference ethosu.vela if it was successfully imported
     _ = ethosu.vela
 
-from typing import Any, TypedDict, get_type_hints
-
+import mlia.backend.vela.compiler as vela_compiler_module  # noqa: E402
 import mlia.core.output_schema as schema
 from mlia.backend.vela.compiler import (
     VelaSummary,
@@ -37,6 +37,16 @@ from mlia.backend.vela.performance import (
 from mlia.core.output_validation import validate_standardized_output  # noqa: E402
 from mlia.target.ethos_u.config import EthosUConfiguration  # noqa: E402
 from mlia.utils.filesystem import recreate_directory  # noqa: E402
+
+
+def patch_vela_main(monkeypatch: pytest.MonkeyPatch, main_mock: Any) -> None:
+    """Patch the lazily-loaded Vela main entry point."""
+    deps = vela_compiler_module._get_vela_deps()
+    monkeypatch.setattr(
+        vela_compiler_module,
+        "_VELA_DEPS_CACHE",
+        replace(deps, main=main_mock),
+    )
 
 
 class ExpectedMetric(TypedDict):
@@ -313,10 +323,7 @@ def test_compile_invalid_model(
     mock_compiler = MagicMock()
     mock_compiler.side_effect = Exception("Bad model!")
 
-    monkeypatch.setattr(
-        "mlia.backend.vela.compiler._get_vela_deps",
-        MagicMock(return_value=SimpleNamespace(main=mock_compiler)),
-    )
+    patch_vela_main(monkeypatch, mock_compiler)
 
     model_path = tmp_path / "optimized_model.tflite"
     with pytest.raises(

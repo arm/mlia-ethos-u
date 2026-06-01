@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -37,6 +38,16 @@ from mlia.backend.vela.compiler import (
     resolve_compiler_config,  # noqa: E402
 )
 from mlia.target.ethos_u.config import EthosUConfiguration  # noqa: E402
+
+
+def patch_vela_main(monkeypatch: pytest.MonkeyPatch, main_mock: Any) -> None:
+    """Patch the lazily-loaded Vela main entry point."""
+    deps = vela_compiler_module._get_vela_deps()
+    monkeypatch.setattr(
+        vela_compiler_module,
+        "_VELA_DEPS_CACHE",
+        replace(deps, main=main_mock),
+    )
 
 
 def test_default_vela_compiler(test_tflite_model: Path, tmp_path: Path) -> None:
@@ -250,9 +261,7 @@ def test_compile_model_system_exit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Test if compiler_model() raises RuntimeError if vela compiler fails."""
-    monkeypatch.setattr(
-        "mlia.backend.vela.compiler.main", MagicMock(side_effect=SystemExit)
-    )
+    patch_vela_main(monkeypatch, MagicMock(side_effect=SystemExit))
     target_config = EthosUConfiguration.load_profile("ethos-u55-256")
     assert target_config.compiler_options is not None, (
         "Vela should be available in tests"
@@ -285,7 +294,7 @@ def test_backend_compiler_model_already_compiled(
 
     vela_main_mock = MagicMock(wraps=main)
 
-    monkeypatch.setattr("mlia.backend.vela.compiler.main", vela_main_mock)
+    patch_vela_main(monkeypatch, vela_main_mock)
 
     # By default, vela will save results in output/ folder,
     # which may impact subsequent runs. tmp_dir will always be removed.
@@ -332,7 +341,7 @@ def test_compile_model_fail_sram_exceeded(
     def fake_compiler(*_: Any) -> None:
         print("Warning: SRAM target for arena memory area exceeded.")
 
-    monkeypatch.setattr("mlia.backend.vela.compiler.main", fake_compiler)
+    patch_vela_main(monkeypatch, fake_compiler)
     with pytest.raises(Exception) as exc_info:
         compiler.compile_model(test_tflite_model)
 
@@ -882,9 +891,10 @@ def test_read_model_with_pytorch_file(
 
     pytorch_file = tmp_path / "model.pt2"
     pytorch_file.write_text("mock")
+    preprocessed_file = tmp_path / "model.tflite"
 
     monkeypatch.setattr(
-        compiler, "_preprocess_model", MagicMock(return_value=pytorch_file)
+        compiler, "_preprocess_model", MagicMock(return_value=preprocessed_file)
     )
 
     model = compiler.read_model(pytorch_file)

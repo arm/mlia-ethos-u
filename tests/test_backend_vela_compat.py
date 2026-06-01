@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+import mlia.backend.vela.compat as vela_compat
 import mlia.core.output_schema as schema
 from mlia.backend.errors import BackendUnavailableError
 from mlia.backend.vela.compat import (
@@ -25,14 +26,9 @@ from mlia.utils.filesystem import working_directory
 TEST_MODEL_TFLITE_INT8_FILE = "test_model_int8.tflite"
 
 
-def replace_get_vela_with_mock(
-    monkeypatch: pytest.MonkeyPatch, mock: MagicMock | None
-) -> None:
-    """Replace Vela with mock."""
-    monkeypatch.setattr(
-        "mlia.backend.vela.compat.get_vela",
-        MagicMock(return_value=mock),
-    )
+def fail_load_vela_deps() -> None:
+    """Raise the same error as a failed Vela dependency load."""
+    raise BackendUnavailableError("Backend vela is not available", "vela")
 
 
 @pytest.mark.parametrize(
@@ -188,7 +184,12 @@ def test_compatibility_check_should_fail_if_checker_not_available(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path | Path
 ) -> None:
     """Test that compatibility check should fail if Vela is not available."""
-    replace_get_vela_with_mock(monkeypatch, None)
+    monkeypatch.setattr(vela_compat, "_VELA_DEPS_CACHE", None)
+    monkeypatch.setattr(
+        vela_compat,
+        "_load_vela_deps",
+        fail_load_vela_deps,
+    )
 
     with working_directory(tmp_path):
         with pytest.raises(
@@ -201,10 +202,11 @@ def test_compatibility_check_should_fail_if_checker_returns_false(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path | Path
 ) -> None:
     """Test that compatibility check should fail if Vela checker returns False."""
-    # Mock get_vela to return False directly
+    monkeypatch.setattr(vela_compat, "_VELA_DEPS_CACHE", None)
     monkeypatch.setattr(
-        "mlia.backend.vela.compat.get_vela",
-        MagicMock(return_value=False),
+        vela_compat,
+        "_load_vela_deps",
+        fail_load_vela_deps,
     )
 
     with working_directory(tmp_path):
