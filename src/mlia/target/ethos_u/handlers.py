@@ -12,6 +12,7 @@ from pathlib import Path
 from mlia.backend.vela.compat import Operators, VelaCompatibilityResult
 from mlia.core.events import AdviceStageFinishedEvent, CollectedDataEvent
 from mlia.core.handlers import WorkflowEventsHandler
+from mlia.core.output_schema import Advice as SchemaAdvice
 from mlia.target.ethos_u.utils.tflite_shims import TFLiteCompatibilityInfo
 from mlia.target.ethos_u.events import (
     EthosUAdvisorEventHandler,
@@ -125,27 +126,27 @@ class EthosUEventHandler(WorkflowEventsHandler, EthosUAdvisorEventHandler):
 
         if self.output_dir:
             # Convert advice to schema objects
-            schema_advices = [advice.to_schema() for advice in self.advice]
+            schema_advice = [advice.to_schema() for advice in self.advice]
 
             self._write_json_with_advice(
                 self.vela_compatibility_result,
                 "vela_compatibility.json",
-                schema_advices,
+                schema_advice,
             )
             self._write_json_with_advice(
                 self.combined_performance_result,
                 "performance.json",
-                schema_advices,
+                schema_advice,
             )
             self._write_json_with_advice(
                 self.vela_performance_result,
                 "vela_performance.json",
-                schema_advices,
+                schema_advice,
             )
             self._write_json_with_advice(
                 self.corstone_performance_result,
                 "corstone_performance.json",
-                schema_advices,
+                schema_advice,
             )
 
     def _write_json_with_advice(
@@ -156,14 +157,14 @@ class EthosUEventHandler(WorkflowEventsHandler, EthosUAdvisorEventHandler):
         | CorstonePerformanceResult
         | None,
         filename: str,
-        advices: list,
+        advice: list[SchemaAdvice],
     ) -> None:
         """Write standardized output JSON with advice included.
 
         Args:
             result_item: Result object with standardized_output
             filename: Output filename
-            advices: List of schema Advice objects to include
+            advice: List of schema Advice objects to include
         """
         if not result_item or not result_item.standardized_output:
             return
@@ -177,7 +178,7 @@ class EthosUEventHandler(WorkflowEventsHandler, EthosUAdvisorEventHandler):
             # Add advice to each result in the output
             if "results" in output:
                 for result in output["results"]:
-                    result["advices"] = [a.to_dict() for a in advices]
+                    result["advice"] = [item.to_dict() for item in advice]
 
             # Write to file
             output_path = self.output_dir / filename

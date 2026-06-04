@@ -3,11 +3,13 @@
 """Tests for Ethos-U event handler API integration behavior."""
 
 import inspect
+import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
+import mlia.core.output_schema as schema
 from mlia.backend.vela.compat import Operators
 from mlia.backend.vela.compat import VelaCompatibilityResult
 from mlia.core.advice_generation import Advice
@@ -224,3 +226,42 @@ def test_ethos_u_event_handler_collect_only_skips_optimization_metrics_submissio
     )
 
     assert handler.reporter.missing_standardized_output is False
+
+
+def test_ethos_u_event_handler_writes_sidecar_advice(tmp_path: Path) -> None:
+    """Sidecar JSON should use schema 1.1.0 result-level advice."""
+    handler = EthosUEventHandler(tmp_path)
+    compatibility_result = VelaCompatibilityResult(
+        legacy_info=Operators([]),
+        standardized_output={
+            "schema_version": schema.SCHEMA_VERSION,
+            "results": [{"kind": "compatibility"}],
+        },
+    )
+    advice = schema.Advice(
+        id="0",
+        category=schema.AdviceCategory.COMPATIBILITY,
+        severity=schema.AdviceSeverity.INFO,
+        message="Check compatibility.",
+    )
+
+    handler._write_json_with_advice(  # pylint: disable=protected-access
+        compatibility_result,
+        "vela_compatibility.json",
+        [advice],
+    )
+
+    output_path = tmp_path / "vela_compatibility.json"
+    assert output_path.exists()
+    output = json.loads(output_path.read_text(encoding="utf-8"))
+    result = output["results"][0]
+
+    assert "advices" not in result
+    assert result["advice"] == [
+        {
+            "id": "0",
+            "category": "compatibility",
+            "severity": "info",
+            "message": "Check compatibility.",
+        }
+    ]

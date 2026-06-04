@@ -206,14 +206,14 @@ def _normalize_output(output: dict[str, Any]) -> dict[str, Any]:
 
     for result in normalized.get("results", []):
         if isinstance(result, dict):
-            _normalize_advices(result.get("advices", []))
+            _normalize_advice(result.get("advice", []))
 
     return normalized
 
 
-def _normalize_advices(advices: Any) -> None:
+def _normalize_advice(advice_entries: Any) -> None:
     """Trim CLI-only advice suffixes that are not emitted by the Python API."""
-    if not isinstance(advices, list):
+    if not isinstance(advice_entries, list):
         return
 
     cli_only_suffixes = (
@@ -221,7 +221,7 @@ def _normalize_advices(advices: Any) -> None:
         " Try running the following command to verify that:",
         " Note: you will need a Keras model for that.",
     )
-    for advice in advices:
+    for advice in advice_entries:
         if not isinstance(advice, dict):
             continue
         message = advice.get("message")
