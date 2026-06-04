@@ -434,6 +434,9 @@ def test_to_standardized_output(
     ]
     assert len(standardized_output["results"]) == 1
     results = standardized_output["results"][0]
+    assert results["warnings"] == [
+        "The performance figures above refer to NPU only",
+    ]
     result_metrics = {metric["name"]: metric for metric in results["metrics"]}
     assert result_metrics["npu_cycles"] == {
         "name": "npu_cycles",

@@ -10,7 +10,7 @@ import json
 import logging
 import re
 import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
@@ -18,9 +18,10 @@ import mlia
 import mlia.core.output_schema as schema
 from mlia.backend.errors import BackendExecutionFailed
 from mlia.backend.repo import get_backend_repository
+from mlia.target.ethos_u.performance_warnings import NPU_ONLY_PERFORMANCE_WARNING
+from mlia.target.ethos_u.utils.model_format import is_pte_file
 from mlia.utils.filesystem import get_mlia_resource_dirs, get_mlia_resources, sha256
 from mlia.utils.proc import Command, OutputLogger, process_command_output
-from mlia.target.ethos_u.utils.model_format import is_pte_file
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,16 @@ _SUPPORTED_EXECUTORCH_APPLICATIONS = {
     ("corstone-320", "ethos-u85"),
 }
 
+
+# Supported Corstone per-layer CSV formats use different memory column names.
+# Treat them as aliases for the memory value used by standard memory metrics.
+_CORSTONE_STAGING_USAGE_COLUMN = "Staging Usage"
+_CORSTONE_SRAM_USAGE_COLUMN = "SRAM Usage"
+_CORSTONE_MEMORY_USAGE_COLUMNS = (
+    _CORSTONE_STAGING_USAGE_COLUMN,
+    _CORSTONE_SRAM_USAGE_COLUMN,
+)
+_CORSTONE_OP_CYCLES_COLUMN = "Op Cycles"
 
 # A superset of stats from all corstone versions
 _PER_LAYERS_STAT_UNITS = {
@@ -74,12 +85,114 @@ def _sanitize_metric_name(name: str) -> str:
 
 def _build_per_layer_metrics(stat: dict) -> list[schema.Metric]:
     metrics = []
-    for name, val in stat.items():
+    for name, value in stat.items():
         unit = _PER_LAYERS_STAT_UNITS.get(name)
-        if unit is None:
+        if unit is None or value in (None, ""):
             continue
-        metrics.append(schema.Metric(_sanitize_metric_name(name), val, unit))
+        metrics.append(
+            schema.Metric(
+                _sanitize_metric_name(name),
+                float(value),
+                unit,
+            )
+        )
     return metrics
+
+
+def _validate_numeric_per_layer_stat(
+    stat: dict,
+    column: str,
+) -> None:
+    """Validate one numeric Corstone per-layer CSV metric value."""
+    value = stat.get(column)
+    if value is None or value == "":
+        return
+
+    try:
+        float(value)
+    except (TypeError, ValueError) as err:
+        raise ValueError(
+            f"Per-layer CSV contains non-numeric metric in column {column!r} "
+            f"for layer {stat.get('Name', '<unknown>')!r}: {value!r}"
+        ) from err
+
+
+def _first_numeric_stat(stat: dict, *names: str) -> float | None:
+    """Return the first numeric stat value found for any of the names."""
+    for name in names:
+        value = stat.get(name)
+        if value is None or value == "":
+            continue
+        return float(value)
+    return None
+
+
+def _peak_activation_memory(per_layer_stats: list[dict]) -> float | None:
+    """Return the highest per-layer memory usage."""
+    memory_values = []
+    for stat in per_layer_stats:
+        memory = _first_numeric_stat(stat, *_CORSTONE_MEMORY_USAGE_COLUMNS)
+        if memory is not None:
+            memory_values.append(memory)
+
+    if not memory_values:
+        return None
+    return max(memory_values)
+
+
+def _average_memory(per_layer_stats: list[dict]) -> float | None:
+    """Return per-layer memory usage weighted by operation cycles."""
+    weighted_memory = 0.0
+    total_cycles = 0.0
+    for stat in per_layer_stats:
+        memory = _first_numeric_stat(stat, *_CORSTONE_MEMORY_USAGE_COLUMNS)
+        cycles = _first_numeric_stat(stat, _CORSTONE_OP_CYCLES_COLUMN)
+        if memory is None or cycles is None:
+            continue
+        weighted_memory += memory * cycles
+        total_cycles += cycles
+
+    if total_cycles == 0:
+        return None
+    return weighted_memory / total_cycles
+
+
+def _validate_non_negative_number(value: Any, description: str) -> None:
+    """Validate a parsed numeric counter value."""
+    if value is not None and value < 0:
+        raise ValueError(f"Parsed metrics contain negative {description}: {value}")
+
+
+def _validate_non_negative_per_layer_stat(
+    stat: dict,
+    column: str,
+    description: str,
+) -> None:
+    """Validate one numeric Corstone per-layer CSV value when it is present."""
+    value = stat.get(column)
+    if value is None or value == "":
+        return
+
+    numeric_value = float(value)
+    if numeric_value < 0:
+        raise ValueError(
+            f"Per-layer CSV contains negative {description} in column "
+            f"{column!r} for layer {stat.get('Name', '<unknown>')!r}: {numeric_value}"
+        )
+
+
+def _validate_per_layer_stats(per_layer_stats: list[dict]) -> None:
+    """Validate parsed Corstone per-layer CSV metrics."""
+    for stat in per_layer_stats:
+        for column in _PER_LAYERS_STAT_UNITS:
+            _validate_numeric_per_layer_stat(stat, column)
+        for column in _CORSTONE_MEMORY_USAGE_COLUMNS:
+            _validate_non_negative_per_layer_stat(stat, column, "memory usage")
+        _validate_non_negative_per_layer_stat(
+            stat,
+            _CORSTONE_OP_CYCLES_COLUMN,
+            "operation cycles",
+        )
 
 
 def _parse_per_layer_csv(csv_file: Path) -> list[dict]:
@@ -143,6 +256,122 @@ class CorstoneModelPerformanceMetrics:
         return cls(**class_kwargs)
 
 
+def _validate_non_negative_model_stats(
+    model_stats: CorstoneModelPerformanceMetrics,
+) -> None:
+    """Validate Corstone model-level performance counters."""
+    for field_info in fields(model_stats):
+        _validate_non_negative_number(
+            getattr(model_stats, field_info.name),
+            field_info.name,
+        )
+
+
+def _target_utilization(model_stats: CorstoneModelPerformanceMetrics) -> float:
+    """Return target utilization from Corstone cycle counters."""
+    if model_stats.npu_total_cycles == 0:
+        return 0.0
+    return model_stats.npu_active_cycles / model_stats.npu_total_cycles * 100
+
+
+def _build_model_metrics(
+    model_stats: CorstoneModelPerformanceMetrics,
+) -> list[schema.Metric]:
+    """Build Corstone model-level performance metrics."""
+    metrics = [
+        schema.Metric(
+            name="npu_active_cycles",
+            value=float(model_stats.npu_active_cycles),
+            unit="cycles",
+        ),
+        schema.Metric(
+            name="npu_idle_cycles",
+            value=float(model_stats.npu_idle_cycles),
+            unit="cycles",
+        ),
+        schema.Metric(
+            name="npu_total_cycles",
+            value=float(model_stats.npu_total_cycles),
+            unit="cycles",
+        ),
+        schema.Metric(
+            name="npu_axi0_rd_data_beat_received",
+            value=float(model_stats.npu_axi0_rd_data_beat_received),
+            unit="beats",
+        ),
+        schema.Metric(
+            name="npu_axi0_wr_data_beat_written",
+            value=float(model_stats.npu_axi0_wr_data_beat_written),
+            unit="beats",
+        ),
+        schema.Metric(
+            name="npu_axi1_rd_data_beat_received",
+            value=float(model_stats.npu_axi1_rd_data_beat_received),
+            unit="beats",
+        ),
+    ]
+
+    if model_stats.npu_axi1_wr_data_beat_written is not None:
+        metrics.append(
+            schema.Metric(
+                name="npu_axi1_wr_data_beat_written",
+                value=float(model_stats.npu_axi1_wr_data_beat_written),
+                unit="beats",
+            )
+        )
+
+    return metrics
+
+
+def _build_standard_corstone_metrics(
+    model_stats: CorstoneModelPerformanceMetrics,
+    per_layer_stats: list[dict],
+) -> list[schema.Metric]:
+    """Build Corstone-backed standard performance metrics."""
+    metrics = [
+        schema.Metric(
+            name=schema.METRIC_NAME_TARGET_UTILIZATION,
+            value=_target_utilization(model_stats),
+            unit=schema.UNIT_PERCENT,
+        )
+    ]
+
+    peak_activation_memory = _peak_activation_memory(per_layer_stats)
+    if peak_activation_memory is not None:
+        metrics.append(
+            schema.Metric(
+                name=schema.METRIC_NAME_PEAK_ACTIVATION_MEMORY,
+                value=peak_activation_memory,
+                unit=schema.UNIT_BYTES,
+            )
+        )
+
+    average_memory = _average_memory(per_layer_stats)
+    if average_memory is not None:
+        metrics.append(
+            schema.Metric(
+                name=schema.METRIC_NAME_AVERAGE_MEMORY,
+                value=average_memory,
+                unit=schema.UNIT_BYTES,
+            )
+        )
+
+    return metrics
+
+
+def _build_breakdowns(per_layer_stats: list[dict]) -> list[schema.Breakdown]:
+    """Build Corstone per-layer breakdowns."""
+    return [
+        schema.Breakdown(
+            scope=schema.OperatorScope.OPERATOR,
+            name=stat["NNG Operator"],
+            location=stat["Name"],
+            metrics=_build_per_layer_metrics(stat),
+        )
+        for stat in per_layer_stats
+    ]
+
+
 @dataclass
 class CorstonePerformanceMetrics:
     """Performance metrics parsed from generic inference output."""
@@ -155,9 +384,15 @@ class CorstonePerformanceMetrics:
         cls, target: str, metrics: dict[str, Any], per_layer_file: Path | None = None
     ) -> CorstonePerformanceMetrics:
         """Create CorstoneModelPerformanceMetrics from FVP output."""
+        model_stats = CorstoneModelPerformanceMetrics.from_fvp_metrics(target, metrics)
+        _validate_non_negative_model_stats(model_stats)
+
+        per_layer_stats = _parse_per_layer_csv(per_layer_file) if per_layer_file else []
+        _validate_per_layer_stats(per_layer_stats)
+
         return cls(
-            CorstoneModelPerformanceMetrics.from_fvp_metrics(target, metrics),
-            _parse_per_layer_csv(per_layer_file) if per_layer_file else [],
+            model_stats,
+            per_layer_stats,
         )
 
     def to_standardized_output(
@@ -259,66 +494,22 @@ class CorstonePerformanceMetrics:
             notes=None,
         )
 
-        # Create performance metrics
-        metrics = [
-            schema.Metric(
-                name="npu_active_cycles",
-                value=float(self.npu_model_stats.npu_active_cycles),
-                unit="cycles",
-            ),
-            schema.Metric(
-                name="npu_idle_cycles",
-                value=float(self.npu_model_stats.npu_idle_cycles),
-                unit="cycles",
-            ),
-            schema.Metric(
-                name="npu_total_cycles",
-                value=float(self.npu_model_stats.npu_total_cycles),
-                unit="cycles",
-            ),
-            schema.Metric(
-                name="npu_axi0_rd_data_beat_received",
-                value=float(self.npu_model_stats.npu_axi0_rd_data_beat_received),
-                unit="beats",
-            ),
-            schema.Metric(
-                name="npu_axi0_wr_data_beat_written",
-                value=float(self.npu_model_stats.npu_axi0_wr_data_beat_written),
-                unit="beats",
-            ),
-            schema.Metric(
-                name="npu_axi1_rd_data_beat_received",
-                value=float(self.npu_model_stats.npu_axi1_rd_data_beat_received),
-                unit="beats",
-            ),
-        ]
-
-        breakdowns = []
-        for stat in self.npu_per_layer_stats:
-            breakdowns.append(
-                schema.Breakdown(
-                    scope=schema.OperatorScope.OPERATOR,
-                    name=stat["NNG Operator"],
-                    location=stat["Name"],
-                    metrics=_build_per_layer_metrics(stat),
-                )
+        metrics = _build_model_metrics(self.npu_model_stats)
+        metrics.extend(
+            _build_standard_corstone_metrics(
+                self.npu_model_stats,
+                self.npu_per_layer_stats,
             )
-
-        if self.npu_model_stats.npu_axi1_wr_data_beat_written is not None:
-            metrics.append(
-                schema.Metric(
-                    name="npu_axi1_wr_data_beat_written",
-                    value=float(self.npu_model_stats.npu_axi1_wr_data_beat_written),
-                    unit="beats",
-                )
-            )
+        )
+        metrics = schema.ensure_standard_performance_metrics(metrics)
+        breakdowns = _build_breakdowns(self.npu_per_layer_stats)
 
         # Create result
         result = schema.Result(
             kind=schema.ResultKind.PERFORMANCE,
             status=schema.ResultStatus.OK,
             producer=backend.id,
-            warnings=[],
+            warnings=[NPU_ONLY_PERFORMANCE_WARNING],
             errors=[],
             metrics=metrics,
             mode=schema.ModeType.SIMULATED,  # Corstone is simulation
@@ -366,7 +557,7 @@ class GenericInferenceOutputParser:
                 per_layer_file,
             )
         except Exception as err:
-            raise ValueError("Unable to parse output and get metrics.") from err
+            raise ValueError(f"Unable to parse output and get metrics: {err}") from err
 
     def _parse_data(self) -> dict[str, int]:
         """Parse the data."""

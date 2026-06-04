@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 
 import mlia
 import mlia.core.output_schema as schema
+from mlia.target.ethos_u.performance_warnings import NPU_ONLY_PERFORMANCE_WARNING
 from mlia.utils.filesystem import sha256
 
 logger = logging.getLogger(__name__)
@@ -165,7 +166,7 @@ class PerformanceMetrics:
         # Create context
         context = schema.Context(cli_arguments=cli_arguments or [])
 
-        # Create performance metrics
+        # Backend-specific raw Vela metrics.
         model_metrics = [
             schema.Metric(name="npu_cycles", value=self.npu_cycles, unit="cycles"),
             schema.Metric(
@@ -189,20 +190,6 @@ class PerformanceMetrics:
                 name="batch_inference_time",
                 value=self.batch_inference_time,
                 unit="seconds",
-            ),
-            schema.Metric(
-                name=schema.METRIC_NAME_INFERENCES_PER_SECOND,
-                value=self.inferences_per_second,
-                unit=schema.UNIT_INFERENCES_PER_SECOND,
-            ),
-            schema.Metric(
-                name=schema.METRIC_NAME_TARGET_UTILIZATION,
-                value=(
-                    (self.npu_cycles / self.total_cycles) * 100
-                    if self.total_cycles
-                    else 0.0
-                ),
-                unit=schema.UNIT_PERCENT,
             ),
             schema.Metric(name="batch_size", value=self.batch_size, unit="count"),
             schema.Metric(
@@ -229,6 +216,26 @@ class PerformanceMetrics:
                 unit="bytes",
             ),
         ]
+
+        # Standard performance metrics defined by the output schema.
+        model_metrics.extend(
+            [
+                schema.Metric(
+                    name=schema.METRIC_NAME_INFERENCES_PER_SECOND,
+                    value=self.inferences_per_second,
+                    unit=schema.UNIT_INFERENCES_PER_SECOND,
+                ),
+                schema.Metric(
+                    name=schema.METRIC_NAME_TARGET_UTILIZATION,
+                    value=(
+                        (self.npu_cycles / self.total_cycles) * 100
+                        if self.total_cycles
+                        else 0.0
+                    ),
+                    unit=schema.UNIT_PERCENT,
+                ),
+            ]
+        )
         peak_memory_usage = _peak_memory_usage(self.layerwise_performance_info)
         if peak_memory_usage is not None:
             model_metrics.append(
@@ -312,6 +319,8 @@ class PerformanceMetrics:
             kind=schema.ResultKind.PERFORMANCE,
             status=schema.ResultStatus.OK,
             producer="vela",
+            warnings=[NPU_ONLY_PERFORMANCE_WARNING],
+            errors=[],
             metrics=model_metrics,
             breakdowns=breakdowns,
         )
@@ -452,7 +461,7 @@ def parse_layerwise_perf_csv(vela_csv_file: Path, metrics: list) -> LayerwisePer
                 layer_info = LayerPerfInfo(**ids_to_metrics)
                 if layer_info.op_cycles < 0:
                     raise ValueError(
-                        "Vela per-layer CSV contains negative op_cycles "
+                        "Per-layer CSV contains negative op_cycles "
                         f"for layer {layer_info.name!r}: {layer_info.op_cycles}"
                     )
                 layerwise_info.append(layer_info)

@@ -27,6 +27,7 @@ from mlia.backend.corstone.performance import (
 from mlia.backend.errors import BackendExecutionFailed
 from mlia.core.context import ExecutionContext
 from mlia.core.events import AdviceStageFinishedEvent, CollectedDataEvent
+from mlia.core.output_validation import validate_standardized_output
 from mlia.target.ethos_u.config import EthosUConfiguration
 from mlia.target.ethos_u.data_collection import EthosUPerformance
 from mlia.target.ethos_u.handlers import EthosUEventHandler
@@ -87,6 +88,28 @@ def duplicate_key_output() -> list[str]:
     ]
 
 
+def negative_counter_output() -> list[str]:
+    """Return FVP output with a negative counter."""
+    json_data = """[
+    {
+        "profiling_group": "Inference",
+        "count": 1,
+        "samples": [
+            {"name": "NPU IDLE", "value": [2]},
+            {"name": "NPU AXI0_RD_DATA_BEAT_RECEIVED", "value": [4]},
+            {"name": "NPU AXI0_WR_DATA_BEAT_WRITTEN", "value": [5]},
+            {"name": "NPU AXI1_RD_DATA_BEAT_RECEIVED", "value": [6]},
+            {"name": "NPU ACTIVE", "value": [-1]},
+            {"name": "NPU TOTAL", "value": [3]}
+        ]
+    }
+]"""
+
+    return [
+        f"<metrics>{encode_b64(json_data)}</metrics>",
+    ]
+
+
 def test_generic_inference_output_parser_success(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -126,6 +149,69 @@ def test_generic_inference_output_parser_failure(
         output_parser(line)
 
     with pytest.raises(ValueError, match="Unable to parse output and get metrics"):
+        output_parser.get_metrics(tmp_path)
+
+
+def test_generic_inference_output_parser_rejects_negative_model_counter(
+    tmp_path: Path,
+) -> None:
+    """Negative model counters should fail before collection returns metrics."""
+    output_parser = GenericInferenceOutputParser()
+    for line in negative_counter_output():
+        output_parser(line)
+
+    with pytest.raises(ValueError, match="negative npu_active_cycles"):
+        output_parser.get_metrics(tmp_path)
+
+
+def test_generic_inference_output_parser_rejects_negative_per_layer_counter(
+    tmp_path: Path,
+) -> None:
+    """Negative per-layer counters should fail before collection returns metrics."""
+    per_layer_file = tmp_path / "model_per-layer.csv"
+    per_layer_file.write_text(
+        "NNG Operator,Name,Staging Usage,Op Cycles\nop,op_name,128,-1\n",
+        encoding="utf-8",
+    )
+    output_parser = GenericInferenceOutputParser()
+    for line in valid_fvp_output():
+        output_parser(line)
+
+    with pytest.raises(ValueError, match="negative operation cycles"):
+        output_parser.get_metrics(tmp_path)
+
+
+def test_generic_inference_output_parser_rejects_negative_per_layer_memory(
+    tmp_path: Path,
+) -> None:
+    """Negative per-layer memory usage should fail before collection returns metrics."""
+    per_layer_file = tmp_path / "model_per-layer.csv"
+    per_layer_file.write_text(
+        "NNG Operator,Name,Staging Usage,Op Cycles\nop,op_name,-128,1\n",
+        encoding="utf-8",
+    )
+    output_parser = GenericInferenceOutputParser()
+    for line in valid_fvp_output():
+        output_parser(line)
+
+    with pytest.raises(ValueError, match="negative memory usage"):
+        output_parser.get_metrics(tmp_path)
+
+
+def test_generic_inference_output_parser_rejects_non_numeric_per_layer_metric(
+    tmp_path: Path,
+) -> None:
+    """Non-numeric per-layer metrics should fail before collection returns metrics."""
+    per_layer_file = tmp_path / "model_per-layer.csv"
+    per_layer_file.write_text(
+        "NNG Operator,Name,NPU\nop,op_name,unknown\n",
+        encoding="utf-8",
+    )
+    output_parser = GenericInferenceOutputParser()
+    for line in valid_fvp_output():
+        output_parser(line)
+
+    with pytest.raises(ValueError, match="non-numeric metric.*NPU"):
         output_parser.get_metrics(tmp_path)
 
 
@@ -566,7 +652,22 @@ def test_performance_metrics_to_standardized_output(
             npu_axi1_rd_data_beat_received=150,
             npu_axi1_wr_data_beat_written=75,
         ),
-        [{"NNG Operator": "op", "Name": "op_name", "NPU": 1000}],
+        [
+            {
+                "NNG Operator": "op",
+                "Name": "op_name",
+                "NPU": 1000,
+                "Staging Usage": "150",
+                "Op Cycles": "300",
+            },
+            {
+                "NNG Operator": "op2",
+                "Name": "op2_name",
+                "NPU": 500,
+                "Staging Usage": "180",
+                "Op Cycles": "100",
+            },
+        ],
     )
 
     # Create a model file for hash computation
@@ -577,6 +678,8 @@ def test_performance_metrics_to_standardized_output(
         backend_name="corstone-300",
         target_config={"mac": 256, "target": "ethos-u55"},
     )
+    validate_standardized_output(output)
+
     assert output["model"]["format"] == expected_model_format
 
     # Structure checks
@@ -596,6 +699,9 @@ def test_performance_metrics_to_standardized_output(
     assert "corstone" in output["target"]["description"].lower()
     # Results/metrics checks
     result = output["results"][0]
+    assert result["warnings"] == [
+        "The performance figures above refer to NPU only",
+    ]
     metrics = result["metrics"]
     metrics_dict = {m["name"]: m for m in metrics}
     assert metrics_dict["npu_active_cycles"]["value"] == 1000
@@ -605,12 +711,41 @@ def test_performance_metrics_to_standardized_output(
     assert metrics_dict["npu_axi0_wr_data_beat_written"]["value"] == 100
     assert metrics_dict["npu_axi1_rd_data_beat_received"]["value"] == 150
     assert metrics_dict["npu_axi1_wr_data_beat_written"]["value"] == 75
+    assert metrics_dict[schema.METRIC_NAME_TARGET_UTILIZATION] == {
+        "name": schema.METRIC_NAME_TARGET_UTILIZATION,
+        "value": pytest.approx(1000 / 1500 * 100),
+        "unit": schema.UNIT_PERCENT,
+    }
+    assert metrics_dict[schema.METRIC_NAME_PEAK_ACTIVATION_MEMORY] == {
+        "name": schema.METRIC_NAME_PEAK_ACTIVATION_MEMORY,
+        "value": 180.0,
+        "unit": schema.UNIT_BYTES,
+    }
+    assert metrics_dict[schema.METRIC_NAME_AVERAGE_MEMORY] == {
+        "name": schema.METRIC_NAME_AVERAGE_MEMORY,
+        "value": pytest.approx(((150 * 300) + (180 * 100)) / (300 + 100)),
+        "unit": schema.UNIT_BYTES,
+    }
+    for metric_name, unit in (
+        (schema.METRIC_NAME_ACCELERATOR_OPERATOR_PERCENTAGE, schema.UNIT_PERCENT),
+        (schema.METRIC_NAME_INFERENCES_PER_SECOND, schema.UNIT_INFERENCES_PER_SECOND),
+        (schema.METRIC_NAME_CPU_UTILIZATION, schema.UNIT_PERCENT),
+    ):
+        metric = metrics_dict[metric_name]
+        assert metric["unit"] == unit
+        assert metric["availability"] == "unavailable"
+        assert "value" not in metric
+        assert metric["reason"]
 
     breakdown = result["breakdowns"][0]
     assert breakdown["scope"] == "operator"
     assert breakdown["name"] == "op"
     assert breakdown["location"] == "op_name"
-    assert breakdown["metrics"][0] == {"name": "npu", "value": 1000, "unit": "cycles"}
+    assert breakdown["metrics"] == [
+        {"name": "npu", "value": 1000.0, "unit": "cycles"},
+        {"name": "staging_usage", "value": 150.0, "unit": "bytes"},
+        {"name": "op_cycles", "value": 300.0, "unit": "cycles"},
+    ]
 
 
 def test_performance_metrics_to_standardized_output_with_null_axi1_wr(
@@ -640,11 +775,139 @@ def test_performance_metrics_to_standardized_output_with_null_axi1_wr(
         target_config={"mac": 256, "target": "ethos-u55"},
     )
 
-    # Verify that 6 metrics are present (not 7)
+    # Verify that the optional AXI1 write metric is absent while standard
+    # performance fields are still represented.
     results = output["results"]
     assert len(results) == 1
     metrics = results[0]["metrics"]
-    assert len(metrics) == 6
+    metrics_by_name = {metric["name"]: metric for metric in metrics}
+    metric_names = set(metrics_by_name)
+    assert "npu_axi1_wr_data_beat_written" not in metric_names
+    assert schema.METRIC_NAME_TARGET_UTILIZATION in metric_names
+    assert schema.METRIC_NAME_INFERENCES_PER_SECOND in metric_names
+    for metric_name in (
+        schema.METRIC_NAME_PEAK_ACTIVATION_MEMORY,
+        schema.METRIC_NAME_AVERAGE_MEMORY,
+    ):
+        metric = metrics_by_name[metric_name]
+        assert metric["availability"] == "unavailable"
+        assert "value" not in metric
+        assert metric["reason"]
+
+
+def test_performance_metrics_memory_uses_second_numeric_alias(
+    tmp_path: Path,
+) -> None:
+    """Corstone memory metrics should fall back to the next numeric alias."""
+    perf_metrics = CorstonePerformanceMetrics(
+        CorstoneModelPerformanceMetrics(
+            npu_active_cycles=1000,
+            npu_idle_cycles=500,
+            npu_total_cycles=1500,
+            npu_axi0_rd_data_beat_received=200,
+            npu_axi0_wr_data_beat_written=100,
+            npu_axi1_rd_data_beat_received=150,
+            npu_axi1_wr_data_beat_written=None,
+        ),
+        [
+            {
+                "NNG Operator": "op",
+                "Name": "op_name",
+                "Staging Usage": "",
+                "SRAM Usage": "256",
+                "Op Cycles": "100",
+            }
+        ],
+    )
+    model_file = tmp_path / "model.tflite"
+    model_file.write_bytes(b"test model content")
+
+    output = perf_metrics.to_standardized_output(
+        model_path=model_file,
+        backend_name="corstone-300",
+        target_config={"mac": 256, "target": "ethos-u55"},
+    )
+
+    metrics = {metric["name"]: metric for metric in output["results"][0]["metrics"]}
+    assert metrics[schema.METRIC_NAME_PEAK_ACTIVATION_MEMORY] == {
+        "name": schema.METRIC_NAME_PEAK_ACTIVATION_MEMORY,
+        "value": 256.0,
+        "unit": schema.UNIT_BYTES,
+    }
+    assert metrics[schema.METRIC_NAME_AVERAGE_MEMORY] == {
+        "name": schema.METRIC_NAME_AVERAGE_MEMORY,
+        "value": 256.0,
+        "unit": schema.UNIT_BYTES,
+    }
+
+
+def test_performance_metrics_to_standardized_output_validates(
+    tmp_path: Path,
+) -> None:
+    """Test Corstone performance output against the MLIA output schema."""
+    perf_metrics = CorstonePerformanceMetrics(
+        CorstoneModelPerformanceMetrics(
+            npu_active_cycles=1000,
+            npu_idle_cycles=500,
+            npu_total_cycles=1500,
+            npu_axi0_rd_data_beat_received=200,
+            npu_axi0_wr_data_beat_written=100,
+            npu_axi1_rd_data_beat_received=150,
+            npu_axi1_wr_data_beat_written=75,
+        ),
+        [
+            {
+                "NNG Operator": "op",
+                "Name": "op_name",
+                "NPU": "1000",
+                "Staging Usage": "150",
+                "Op Cycles": "300",
+            }
+        ],
+    )
+    model_file = tmp_path / "model.tflite"
+    model_file.write_bytes(b"test model content")
+
+    output = perf_metrics.to_standardized_output(
+        model_path=model_file,
+        backend_name="corstone-300",
+        target_config={"mac": 256, "target": "ethos-u55"},
+    )
+
+    validate_standardized_output(output)
+
+
+def test_performance_metrics_to_standardized_output_reports_zero_utilization(
+    tmp_path: Path,
+) -> None:
+    """Corstone target utilization should handle zero total cycles."""
+    perf_metrics = CorstonePerformanceMetrics(
+        CorstoneModelPerformanceMetrics(
+            npu_active_cycles=1000,
+            npu_idle_cycles=0,
+            npu_total_cycles=0,
+            npu_axi0_rd_data_beat_received=200,
+            npu_axi0_wr_data_beat_written=100,
+            npu_axi1_rd_data_beat_received=150,
+            npu_axi1_wr_data_beat_written=None,
+        ),
+        [],
+    )
+    model_file = tmp_path / "model.tflite"
+    model_file.write_bytes(b"test model content")
+
+    output = perf_metrics.to_standardized_output(
+        model_path=model_file,
+        backend_name="corstone-300",
+        target_config={"mac": 256, "target": "ethos-u55"},
+    )
+
+    metrics = {metric["name"]: metric for metric in output["results"][0]["metrics"]}
+    assert metrics[schema.METRIC_NAME_TARGET_UTILIZATION] == {
+        "name": schema.METRIC_NAME_TARGET_UTILIZATION,
+        "value": 0.0,
+        "unit": schema.UNIT_PERCENT,
+    }
 
 
 def test_ethosu_collector_and_handler_write_json(

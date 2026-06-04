@@ -31,6 +31,7 @@ from mlia.target.ethos_u.utils.tflite_shims import TFLiteCompatibilityInfo
 from mlia.target.ethos_u.common_reporters import report_tflite_compatibility
 from mlia.target.ethos_u.config import EthosUConfiguration
 from mlia.target.ethos_u.performance import PerformanceMetrics
+from mlia.target.ethos_u.performance_warnings import NPU_ONLY_PERFORMANCE_WARNING
 from mlia.utils.console import style_improvement
 from mlia.utils.types import is_list_of
 
@@ -393,7 +394,7 @@ def report_perf_metrics(
             ],
             name="Performance metrics",
             alias="performance_metrics",
-            notes="IMPORTANT: The performance figures above refer to NPU only",
+            notes=f"IMPORTANT: {NPU_ONLY_PERFORMANCE_WARNING}",
         )
     if layerwise_rows == []:
         return Table(
@@ -405,7 +406,7 @@ def report_perf_metrics(
             rows=rows,
             name="Performance metrics",
             alias="performance_metrics",
-            notes="IMPORTANT: The performance figures above refer to NPU only",
+            notes=f"IMPORTANT: {NPU_ONLY_PERFORMANCE_WARNING}",
         )
     return CompoundReport(
         [
@@ -418,7 +419,7 @@ def report_perf_metrics(
                 rows=rows,
                 name="Performance metrics",
                 alias="performance_metrics",
-                notes="IMPORTANT: The performance figures above refer to NPU only",
+                notes=f"IMPORTANT: {NPU_ONLY_PERFORMANCE_WARNING}",
             ),
             Table(
                 columns=[

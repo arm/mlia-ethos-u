@@ -159,6 +159,27 @@ class Operators:
         """Return number of npu supported operators."""
         return sum(op.run_on_npu.supported for op in self.ops)
 
+    def _accelerator_operator_percentage_metrics(self) -> list[schema.Metric]:
+        """Build compatibility operator percentage metrics."""
+        if self.total_number:
+            return [
+                schema.Metric(
+                    name=schema.METRIC_NAME_ACCELERATOR_OPERATOR_PERCENTAGE,
+                    value=self.npu_supported_ratio * 100,
+                    unit=schema.UNIT_PERCENT,
+                )
+            ]
+
+        return [
+            schema.Metric(
+                name=schema.METRIC_NAME_ACCELERATOR_OPERATOR_PERCENTAGE,
+                value=None,
+                unit=schema.UNIT_PERCENT,
+                availability=schema.MetricAvailability.UNAVAILABLE,
+                reason="Operator placement data is not available.",
+            )
+        ]
+
     def to_standardized_output(
         self,
         model_path: Path,
@@ -293,6 +314,7 @@ class Operators:
             producer=backend.id,
             warnings=[],
             errors=[],
+            metrics=self._accelerator_operator_percentage_metrics(),
             checks=checks,
             entities=entities,
         )

@@ -281,6 +281,12 @@ def test_operators_to_standardized_output(tmp_path: Path) -> None:
     result = results[0]
     assert result["kind"] == "compatibility"
     assert result["status"] == "partial"  # Some supported, some not
+    metrics = {metric["name"]: metric for metric in result["metrics"]}
+    assert metrics[schema.METRIC_NAME_ACCELERATOR_OPERATOR_PERCENTAGE] == {
+        "name": schema.METRIC_NAME_ACCELERATOR_OPERATOR_PERCENTAGE,
+        "value": pytest.approx(100 / 3),
+        "unit": schema.UNIT_PERCENT,
+    }
 
     # Verify checks and entities
     assert "checks" in result
@@ -338,6 +344,30 @@ def test_operators_to_standardized_output_all_supported(tmp_path: Path) -> None:
     assert len(results) == 1
     result = results[0]
     assert result["status"] == "ok"  # All supported
+    metrics = {metric["name"]: metric for metric in result["metrics"]}
+    assert metrics[schema.METRIC_NAME_ACCELERATOR_OPERATOR_PERCENTAGE] == {
+        "name": schema.METRIC_NAME_ACCELERATOR_OPERATOR_PERCENTAGE,
+        "value": 100,
+        "unit": schema.UNIT_PERCENT,
+    }
+
+
+def test_operators_to_standardized_output_reports_unavailable_percentage_for_no_ops(
+    tmp_path: Path,
+) -> None:
+    """Operator percentage should be explicit when no operators are available."""
+    model_file = tmp_path / "model.tflite"
+    model_file.write_bytes(b"test model content")
+
+    output = Operators([]).to_standardized_output(model_path=model_file)
+
+    result = output["results"][0]
+    metrics = {metric["name"]: metric for metric in result["metrics"]}
+    metric = metrics[schema.METRIC_NAME_ACCELERATOR_OPERATOR_PERCENTAGE]
+    assert metric["unit"] == schema.UNIT_PERCENT
+    assert metric["availability"] == "unavailable"
+    assert "value" not in metric
+    assert metric["reason"]
 
 
 def test_operators_to_standardized_output_handles_broken_vela(
