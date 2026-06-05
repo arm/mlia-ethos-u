@@ -26,6 +26,7 @@ The package is distributed as `mlia-ethos-u` and contributes:
 - [Common commands](#common-commands)
 - [Project layout](#project-layout)
 - [Documentation](#documentation)
+- [Trademarks and copyrights](#trademarks-and-copyrights)
 
 ## Overview
 
@@ -99,7 +100,7 @@ Direct `.pt2` support depends on `mlia-converters-pytorch`, and the current
 Corstone ExecuTorch path is only available for selected target and backend
 combinations.
 
-The package depends on `mlia>=0.11.0.dev6` and is intended to be used as part
+The package depends on `mlia==0.11.0.dev28` and is intended to be used as part
 of a wider MLIA installation rather than as a standalone CLI.
 
 ## Reporting bugs
@@ -167,3 +168,11 @@ uv build
 ## Documentation
 
 Additional package documentation lives in [docs/README.md](docs/README.md).
+
+## Trademarks and copyrights
+
+- Arm, Arm Ethos-U, Arm Cortex-M, and Arm Corstone are registered trademarks or trademarks of Arm Limited (or its subsidiaries) in the U.S. and/or elsewhere.
+- TensorFlow is a trademark of Google LLC.
+- PyTorch and ExecuTorch are trademarks of The Linux Foundation.
+- Linux is the registered trademark of Linus Torvalds in the U.S. and elsewhere.
+- Python is a registered trademark of the PSF.
