@@ -14,10 +14,11 @@ from pathlib import Path
 from typing import Any, Literal
 
 from mlia.backend.errors import BackendUnavailableError
-from mlia.core.errors import ConfigurationError
-from mlia.plugins.converter_registry import ConverterRegistry
-from mlia.plugins.plugins import load_converter_plugins
-from mlia.target.ethos_u.utils.model_format import is_pytorch_file
+from mlia.transformers.error import TransformerNotFoundError
+from mlia.transformers.registry import (
+    TransformRequest,
+    transform_model,
+)
 from mlia.utils.filesystem import get_vela_config
 from mlia.utils.logging import redirect_output, redirect_raw_output
 
@@ -77,24 +78,10 @@ def _get_vela_deps() -> VelaCompilerDeps:
 
 
 # File extensions that Vela natively supports
-_VELA_SUPPORTED_FILE_EXTENSIONS = [".tflite", ".tosa"]
+_VELA_SUPPORTED_FILE_EXTENSIONS = [".tflite", ".tosa", ".tosamlir"]
 
 # TOSA format file extensions (TOSA outputs to raw .npz format after compilation)
 _TOSA_FILE_FORMAT_EXTENSIONS = [".tosa", ".tosamlir"]
-
-
-def _get_converter(name: str):
-    registry = ConverterRegistry()
-    load_converter_plugins(registry)
-    converter = registry.get(name)
-    if converter is None:
-        if name == "pt2_to_tosa":
-            raise ConfigurationError(
-                "PyTorch conversion requires the 'mlia-converters-pytorch' plugin "
-                "to be installed."
-            )
-        raise ConfigurationError(f"Converter '{name}' is not available.")
-    return converter
 
 
 @dataclass
@@ -319,63 +306,33 @@ class VelaCompiler:
             arena_cache_size=float(self.arena_cache_size or 0.0),
         )
 
-    @staticmethod
-    def _convert_pytorch_to_tosa(pytorch_file: Path, output_dir: Path) -> Path:
-        """Convert PyTorch model to TOSA format using mlia_pytorch_to_tosa_converter.
-
-        Accepts a PyTorch model file and an output directory,
-        and returns the path to the generated TOSA file.
-        Raises RuntimeError if conversion fails.
-        """
-        if not pytorch_file.is_file():
-            raise FileNotFoundError(f"Input file does not exist: {pytorch_file}")
-        if not is_pytorch_file(pytorch_file):
-            raise ValueError(
-                "Unsupported model file type. Only .pt2 files are supported."
-            )
-        logger.info("Converting PyTorch model %s to TOSA format", pytorch_file)
-        converter = _get_converter("pt2_to_tosa")
-        try:
-            tosa_file = converter(pytorch_file, output_dir)
-            logger.info("Successfully converted PyTorch model to TOSA: %s", tosa_file)
-            return tosa_file
-        except Exception as err:
-            raise RuntimeError(
-                f"Failed to convert PyTorch model {pytorch_file} to TOSA format"
-            ) from err
-
     def _preprocess_model(self, model_path: Path) -> Path:
         """Preprocess model file to supported format if needed.
 
-        Vela natively supports TFLite (.tflite) and TOSA (.tosa) files.
+        Vela natively supports TFLite (.tflite) and TOSA (.tosa, .tosamlir) files.
         PyTorch (.pt2) files are converted to TOSA format first.
         """
         if model_path.suffix.lower() in _VELA_SUPPORTED_FILE_EXTENSIONS:
             return model_path
 
-        if is_pytorch_file(model_path):
-            logger.info("Detected PyTorch model, converting to TOSA format")
-            tosa_file = self._convert_pytorch_to_tosa(model_path, self.output_dir)
-            return tosa_file
+        request = TransformRequest(
+            model=model_path,
+            target_format="tosa",
+            output_dir=self.output_dir,
+            transform_options={},
+        )
 
-        return model_path
-
-    def read_model(self, model: str | Path) -> Model:
-        """Read model."""
-        logger.debug("Read model %s", model)
-
-        model_path = Path(model) if isinstance(model, str) else model
-        processed_model = self._preprocess_model(model_path)
-        if processed_model.suffix.lower() != ".tflite":
-            raise ConfigurationError(
-                "VelaCompiler.read_model supports only TFLite (.tflite) inputs. "
-                f"Got {processed_model.suffix or 'no extension'} from {model_path}."
-            )
-
-        _, compiled_model = self.compile_model(processed_model)
-        graph, network_type = self._read_model(compiled_model)
-
-        return Model(graph, network_type)
+        try:
+            return transform_model(request)
+        except TransformerNotFoundError as err:
+            if model_path.suffix.lower() == ".pt2":
+                err.args = (
+                    f"{err}\n"
+                    "PyTorch to TOSA conversion could not be resolved. "
+                    "Try installing the 'mlia-converters-pytorch' plugin.",
+                )
+                raise
+            raise
 
     def compile_model(
         self, model_path: Path, already_compiled: bool = False

@@ -1,492 +1,223 @@
-# SPDX-FileCopyrightText: Copyright 2022-2026, Arm Limited and/or its affiliates.
+# SPDX-FileCopyrightText: Copyright 2026, Arm Limited and/or its affiliates.
 # SPDX-License-Identifier: Apache-2.0
-"""Tests for main module."""
+"""Tests for CLI entry point behavior."""
 
 from __future__ import annotations
 
-import argparse
-import sys
-from functools import wraps
-from pathlib import Path
-from typing import Any, Callable
-from unittest.mock import ANY, MagicMock, call
+import re
+from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
+from typer.testing import CliRunner
 
-import mlia.cli.commands
-import mlia.cli.main as mlia_cli_main
-from mlia.backend.errors import BackendUnavailableError
-from mlia.cli.main import (
-    CommandInfo,
-    backend_main,
-    get_possible_command_names,
-    main,
-    target_main,
-)
-from mlia.cli.options import add_output_directory
-from mlia.core.context import ExecutionContext
-from mlia.core.errors import ConfigurationError, InternalError
-from tests.utils.logging import clear_loggers
+import mlia.cli.commands as cli_commands
+import mlia.cli.main as cli_main
+
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 
 
-def teardown_function() -> None:
-    """Perform action after test completion.
-
-    This function is launched automatically by pytest after each test
-    in this module.
-    """
-    clear_loggers()
-
-
-def run_cli(
-    monkeypatch: pytest.MonkeyPatch, entrypoint: Callable[[], int], params: list[Any]
-) -> int:
-    """Run a CLI entrypoint with test arguments."""
-    monkeypatch.setattr(sys, "argv", ["mlia", *[str(param) for param in params]])
-    return entrypoint()
-
-
-def test_option_version(
-    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture
-) -> None:
-    """Test --version."""
-    with pytest.raises(SystemExit) as ex:
-        run_cli(monkeypatch, main, ["--version"])
-
-    assert ex.value.code == 0
-
-    stdout, stderr = capfd.readouterr()
-    assert len(stdout.splitlines()) == 1
-    assert stderr == ""
-
-
-def test_command_info() -> None:
-    """Test properties of CommandInfo object."""
-
-    def test_command() -> None:
-        """Test command."""
-
-    command_info = CommandInfo(test_command, ["test"], [])
-    assert command_info.command_name == "test_command"
-    assert command_info.command_name_and_aliases == ["test_command", "test"]
-    assert command_info.command_help == "Test command"
-
-
-def test_get_possible_command_names() -> None:
-    """Test get_possible_command_names returns all command names and aliases."""
-
-    def command_one() -> None:
-        """First command."""
-
-    def command_two() -> None:
-        """Second command."""
-
-    def third_cmd() -> None:
-        """Third command."""
-
-    commands = [
-        CommandInfo(command_one, ["c1", "cmd1"], []),
-        CommandInfo(command_two, [], []),
-        CommandInfo(third_cmd, ["t3"], []),
-    ]
-
-    result = get_possible_command_names(commands)
-
-    assert result == [
-        "command_one",
-        "c1",
-        "cmd1",
-        "command_two",
-        "third_cmd",
-        "t3",
-    ]
-
-
-def wrap_mock_command(mock: MagicMock, command: Callable) -> Callable:
-    """Wrap the command with the mock."""
-
-    @wraps(command)
-    def mock_command(*args: Any, **kwargs: Any) -> Any:
-        """Mock the command."""
-        mock(*args, **kwargs)
-
-    return mock_command
-
-
-DEFAULT_AUTO_INSTALL_ARGS = {
-    "i_agree_to_the_contained_eula": False,
-    "noninteractive": False,
-}
+def _strip_ansi(value: str) -> str:
+    """Remove ANSI escape sequences from captured CLI output."""
+    return ANSI_ESCAPE_RE.sub("", value)
 
 
 @pytest.mark.parametrize(
-    "params, expected_call",
+    ("app", "expected_text"),
     [
-        [
-            ["check", "sample_model.tflite", "--target-profile", "ethos-u55-256"],
-            call(
-                ctx=ANY,
-                target_profile="ethos-u55-256",
-                model="sample_model.tflite",
-                compatibility=False,
-                performance=False,
-                backend=None,
-                **DEFAULT_AUTO_INSTALL_ARGS,
-            ),
-        ],
-        [
-            ["check", "sample_model.tflite", "--target-profile", "ethos-u55-128"],
-            call(
-                ctx=ANY,
-                target_profile="ethos-u55-128",
-                model="sample_model.tflite",
-                compatibility=False,
-                performance=False,
-                backend=None,
-                **DEFAULT_AUTO_INSTALL_ARGS,
-            ),
-        ],
-        [
-            [
+        (
+            cli_main.mlia_app,
+            (
+                "Usage:",
+                "Commands",
+                "backend",
                 "check",
-                "sample_model.h5",
-                "--performance",
-                "--compatibility",
-                "--target-profile",
-                "ethos-u55-256",
-            ],
-            call(
-                ctx=ANY,
-                target_profile="ethos-u55-256",
-                model="sample_model.h5",
-                compatibility=True,
-                performance=True,
-                backend=None,
-                **DEFAULT_AUTO_INSTALL_ARGS,
+                "target",
             ),
-        ],
-        [
-            [
-                "check",
-                "sample_model.h5",
-                "--performance",
-                "--target-profile",
-                "ethos-u55-256",
-            ],
-            call(
-                ctx=ANY,
-                target_profile="ethos-u55-256",
-                model="sample_model.h5",
-                performance=True,
-                compatibility=False,
-                backend=None,
-                **DEFAULT_AUTO_INSTALL_ARGS,
-            ),
-        ],
-        [
-            [
-                "check",
-                "sample_model.h5",
-                "--performance",
-                "--target-profile",
-                "ethos-u55-128",
-            ],
-            call(
-                ctx=ANY,
-                target_profile="ethos-u55-128",
-                model="sample_model.h5",
-                compatibility=False,
-                performance=True,
-                backend=None,
-                **DEFAULT_AUTO_INSTALL_ARGS,
-            ),
-        ],
-        [
-            [
-                "check",
-                "sample_model.h5",
-                "--compatibility",
-                "--target-profile",
-                "ethos-u55-256",
-            ],
-            call(
-                ctx=ANY,
-                target_profile="ethos-u55-256",
-                model="sample_model.h5",
-                compatibility=True,
-                performance=False,
-                backend=None,
-                **DEFAULT_AUTO_INSTALL_ARGS,
-            ),
-        ],
-    ],
-)
-def test_commands_execution(
-    monkeypatch: pytest.MonkeyPatch, params: list[str], expected_call: Any
-) -> None:
-    """Test calling commands from the main function."""
-    mock = MagicMock()
-
-    monkeypatch.setattr(
-        "mlia.cli.options.get_selectable_backends",
-        MagicMock(return_value=["vela", "some_backend"]),
-    )
-
-    for command in ["check"]:
-        monkeypatch.setattr(
-            f"mlia.cli.main.{command}",
-            wrap_mock_command(mock, getattr(mlia_cli_main, command)),
-        )
-
-    run_cli(monkeypatch, main, params)
-
-    mock.assert_called_once_with(*expected_call.args, **expected_call.kwargs)
-
-
-def test_passing_output_directory_parameter(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """Test passing parameter --output-dir."""
-    passed_context: ExecutionContext | None = None
-
-    def sample_command(ctx: ExecutionContext) -> None:
-        """Sample command."""
-        nonlocal passed_context
-        passed_context = ctx
-
-    monkeypatch.setattr(
-        "mlia.cli.main.get_commands",
-        lambda: [CommandInfo(sample_command, [], [add_output_directory])],
-    )
-
-    output_dir = tmp_path / "output"
-    run_cli(monkeypatch, main, ["sample_command", "--output-dir", output_dir])
-
-    assert isinstance(passed_context, ExecutionContext)
-    assert passed_context.output_dir == output_dir / "mlia-output"
-
-
-@pytest.mark.parametrize(
-    "params, expected_call",
-    [
-        [
-            ["list"],
-            call(),
-        ],
-    ],
-)
-def test_commands_execution_backend_main(
-    monkeypatch: pytest.MonkeyPatch,
-    params: list[str],
-    expected_call: Any,
-) -> None:
-    """Test calling commands from the backend_main function."""
-    mock = MagicMock()
-
-    monkeypatch.setattr(
-        "mlia.cli.main.backend_list",
-        wrap_mock_command(mock, mlia_cli_main.backend_list),
-    )
-
-    run_cli(monkeypatch, backend_main, params)
-
-    mock.assert_called_once_with(*expected_call.args, **expected_call.kwargs)
-
-
-@pytest.mark.parametrize(
-    "params, expected_call",
-    [
-        (["list"], call()),
-    ],
-)
-def test_commands_execution_target_main(
-    monkeypatch: pytest.MonkeyPatch,
-    params: list[str],
-    expected_call: Any,
-) -> None:
-    """Test calling commands from the target_main function."""
-    mock = MagicMock()
-
-    monkeypatch.setattr(
-        "mlia.cli.main.target_list",
-        wrap_mock_command(mock, mlia.cli.commands.target_list),
-    )
-
-    run_cli(monkeypatch, target_main, params)
-
-    mock.assert_called_once_with(*expected_call.args, **expected_call.kwargs)
-
-
-# mypy: disable-error-code=misc
-@pytest.mark.parametrize(
-    "debug, exc_mock, expected_output",
-    [
-        [
-            True,
-            MagicMock(side_effect=Exception("Error")),
-            [
-                "Execution finished with error: Error",
-                "Please check the log files in the",
-                "/logs for more details",
-            ],
-        ],
-        [
-            False,
-            MagicMock(side_effect=Exception("Error")),
-            [
-                "Execution finished with error: Error",
-                "Please check the log files in the",
-                "/logs for more details, or enable debug mode (--debug)",
-            ],
-        ],
-        [
-            False,
-            MagicMock(side_effect=KeyboardInterrupt()),
-            ["Execution has been interrupted"],
-        ],
-        [
-            False,
-            MagicMock(
-                side_effect=BackendUnavailableError(
-                    "Backend sample is not available", "sample"
-                )
-            ),
-            ["Error: Backend sample is not available."],
-        ],
-        [
-            False,
-            MagicMock(
-                side_effect=BackendUnavailableError(
-                    "Backend tosa-checker is not available", "tosa-checker"
-                )
-            ),
-            [
-                "Error: Backend tosa-checker is not available.",
-                "Please use next command to install it: "
-                'mlia-backend install "tosa-checker"',
-            ],
-        ],
-        [
-            False,
-            MagicMock(
-                side_effect=BackendUnavailableError(
-                    "Backend vela is not available", "vela"
-                )
-            ),
-            [
-                "Error: Backend vela is not available.",
-                'Please use next command to install it: mlia-backend install "vela"',
-            ],
-        ],
-        [
-            False,
-            MagicMock(side_effect=InternalError("Unknown error")),
-            ["Internal error: Unknown error"],
-        ],
-    ],
-)
-def test_debug_output(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture,
-    debug: bool,
-    exc_mock: MagicMock,
-    expected_output: list[str],
-) -> None:
-    """Test flag --debug."""
-
-    def command_params(parser: argparse.ArgumentParser) -> None:
-        """Add parameters for non default command."""
-        parser.add_argument("--debug", action="store_true")
-
-    def command() -> None:
-        """Run test command."""
-        exc_mock()
-
-    monkeypatch.setattr(
-        "mlia.cli.main.get_commands",
-        MagicMock(
-            return_value=[
-                CommandInfo(
-                    func=command,
-                    aliases=["command"],
-                    opt_groups=[command_params],
-                ),
-            ]
         ),
-    )
-
-    params = ["command"]
-    if debug:
-        params.append("--debug")
-
-    exit_code = run_cli(monkeypatch, main, params)
-    assert exit_code == 1
-
-    stdout, _ = capsys.readouterr()
-    for expected_message in expected_output:
-        assert expected_message in stdout
-
-
-@pytest.mark.parametrize(
-    "exception",
-    [
-        RuntimeError("Init failed"),
-        ConfigurationError("Config broken"),
+        (
+            cli_main.backend_app,
+            (
+                "Usage:",
+                "Commands",
+                "install",
+                "uninstall",
+                "list",
+            ),
+        ),
+        (
+            cli_main.target_app,
+            (
+                "Usage:",
+                "Commands",
+                "list",
+            ),
+        ),
     ],
-    ids=["runtime_error", "configuration_error"],
 )
-def test_setup_context_exception_handling(
-    exception: Exception,
+def test_no_arguments_show_help(app: Any, expected_text: tuple[str, ...]) -> None:
+    """Calling a CLI app without arguments should show help."""
+    result = CliRunner().invoke(app, [])
+
+    assert result.exit_code == 2
+    for text in expected_text:
+        assert text in result.stdout
+
+
+def test_main_calls_mlia_app(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Main entry point should call the root Typer app."""
+    mlia_app = MagicMock()
+
+    monkeypatch.setattr(cli_main, "mlia_app", mlia_app)
+    monkeypatch.setattr(cli_main, "_configure_cli_colors", MagicMock(return_value=True))
+
+    cli_main.main()
+    mlia_app.assert_called_once_with(color=True)
+
+
+def test_configure_cli_colors_enables_color_for_tty_without_no_color(
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture,
 ) -> None:
-    """Test that exceptions during ExecutionContext init are caught and reported.
+    """Colors should be enabled for TTY output when NO_COLOR is unset."""
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    stream = MagicMock()
+    stream.isatty.return_value = True
+    monkeypatch.setattr(cli_main.sys, "stdout", stream)
 
-    The broad except in setup_context should print the error to stderr and
-    exit with code 1 when ExecutionContext raises an exception.
-    """
-
-    # Provide a minimal command definition so parsing succeeds
-    def sample_command(_ctx: ExecutionContext) -> None:
-        """Sample command (unused because context creation fails)."""
-
-    monkeypatch.setattr(
-        mlia_cli_main, "get_commands", lambda: [CommandInfo(sample_command, [], [])]
-    )
-
-    # Force ExecutionContext to raise RuntimeError during setup_context
-    monkeypatch.setattr(
-        mlia_cli_main,
-        "ExecutionContext",
-        MagicMock(side_effect=exception),
-    )
-
-    with pytest.raises(SystemExit) as ex:
-        run_cli(monkeypatch, main, ["sample_command"])
-
-    assert ex.value.code == 1
-    stdout, stderr = capsys.readouterr()
-    assert stdout == ""
-    assert str(exception) in stderr
+    assert cli_main._configure_cli_colors() is True
+    assert cli_commands.console.no_color is False
 
 
-def test_run_command_configuration_error(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+def test_configure_cli_colors_disables_color_when_stdout_is_not_tty(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """
-    Test that ConfigurationError during command execution is caught in run_command.
-    """
+    """Colors should be disabled for non-TTY output."""
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    stream = MagicMock()
+    stream.isatty.return_value = False
+    monkeypatch.setattr(cli_main.sys, "stdout", stream)
 
-    def sample_command(ctx: ExecutionContext) -> None:
-        """Sample command that raises ConfigurationError."""
-        raise ConfigurationError("Configuration is invalid")
+    assert cli_main._configure_cli_colors() is False
+    assert cli_commands.console.no_color is True
 
-    monkeypatch.setattr(
-        mlia_cli_main, "get_commands", lambda: [CommandInfo(sample_command, [], [])]
+
+def test_configure_cli_colors_disables_color_when_no_color_is_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Colors should be disabled when NO_COLOR is set."""
+    monkeypatch.setenv("NO_COLOR", "1")
+    stream = MagicMock()
+    stream.isatty.return_value = True
+    monkeypatch.setattr(cli_main.sys, "stdout", stream)
+
+    assert not cli_main._configure_cli_colors()
+    assert cli_commands.console.no_color
+
+
+def test_check_without_arguments_shows_help_and_exit_code_2() -> None:
+    """The check command should show help and exit with status 2 when empty."""
+    result = CliRunner().invoke(cli_main.mlia_app, ["check"], terminal_width=120)
+
+    assert result.exit_code == 2
+    assert "Usage:" in result.stdout
+    assert "Generate compatibility/performance advice for a model" in result.stdout
+
+
+def test_check_help_lists_target_profile_option() -> None:
+    """The check command help should list the target profile flag."""
+    result = CliRunner().invoke(
+        cli_main.mlia_app,
+        ["check", "--help"],
+        terminal_width=120,
+    )
+    help_output = _strip_ansi(result.stdout)
+
+    assert result.exit_code == 0
+    assert "--target-profile" in help_output
+
+
+def test_check_accepts_updated_flag_names() -> None:
+    """Updated long option names should be accepted by the parser."""
+    result = CliRunner().invoke(
+        cli_main.mlia_app,
+        ["check", "--compatibility"],
     )
 
-    exit_code = run_cli(monkeypatch, main, ["sample_command"])
+    assert result.exit_code == 2
+    assert "Missing argument 'MODEL'" in result.output
 
-    assert exit_code == 1
-    stdout, _ = capsys.readouterr()
-    assert "Configuration is invalid" in stdout
+
+def test_main_dispatches_backend_list(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The backend list command should run through the main mlia entry point."""
+    format_backend_info = MagicMock()
+
+    monkeypatch.setattr(cli_commands, "setup_logging", MagicMock())
+    monkeypatch.setattr(cli_commands, "format_backend_info", format_backend_info)
+
+    result = CliRunner().invoke(cli_main.mlia_app, ["backend", "list"])
+
+    assert result.exit_code == 0
+    format_backend_info.assert_called_once_with()
+
+
+def test_main_dispatches_target_list(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The target list command should run through the main mlia entry point."""
+    format_target_info = MagicMock()
+
+    monkeypatch.setattr(cli_commands, "setup_logging", MagicMock())
+    monkeypatch.setattr(cli_commands, "format_target_info", format_target_info)
+
+    result = CliRunner().invoke(cli_main.mlia_app, ["target", "list"])
+
+    assert result.exit_code == 0
+    format_target_info.assert_called_once_with()
+
+
+def test_backend_main_warns_about_deprecated_entry_point(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Backend entry point should warn before calling the Typer app."""
+    backend_app = MagicMock()
+    secho = MagicMock()
+
+    monkeypatch.setattr(cli_main, "backend_app", backend_app)
+    monkeypatch.setattr(
+        cli_main, "_configure_cli_colors", MagicMock(return_value=False)
+    )
+    monkeypatch.setattr(cli_main.typer, "secho", secho)
+
+    cli_main.backend_main()
+
+    secho.assert_called_once_with(
+        cli_main.DEPRECATED_BACKEND_ENTRY_POINT,
+        fg=cli_main.typer.colors.YELLOW,
+        color=False,
+        err=True,
+    )
+    backend_app.assert_called_once_with(color=False)
+    assert capsys.readouterr().err == ""
+
+
+def test_target_main_warns_about_deprecated_entry_point(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Target entry point should warn before calling the Typer app."""
+    target_app = MagicMock()
+    secho = MagicMock()
+
+    monkeypatch.setattr(cli_main, "target_app", target_app)
+    monkeypatch.setattr(
+        cli_main, "_configure_cli_colors", MagicMock(return_value=False)
+    )
+    monkeypatch.setattr(cli_main.typer, "secho", secho)
+
+    cli_main.target_main()
+
+    secho.assert_called_once_with(
+        cli_main.DEPRECATED_TARGET_ENTRY_POINT,
+        fg=cli_main.typer.colors.YELLOW,
+        color=False,
+        err=True,
+    )
+    target_app.assert_called_once_with(color=False)
+    assert capsys.readouterr().err == ""

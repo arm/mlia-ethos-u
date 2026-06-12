@@ -22,8 +22,6 @@ from mlia.backend.vela.performance import LayerwisePerfInfo
 from mlia.core.context import Context, ExecutionContext
 from mlia.core.errors import ConfigurationError
 from mlia.core.performance import PerformanceEstimator
-from mlia.plugins.converter_registry import ConverterRegistry
-from mlia.plugins.plugins import load_converter_plugins
 from mlia.target.ethos_u.optimization_shims import OptimizationSettings
 from mlia.target.ethos_u.utils.tflite_shims import (
     ModelConfiguration,
@@ -37,24 +35,11 @@ from mlia.target.ethos_u.utils.model_format import (
     is_tflite_model,
     is_tosa_file,
 )
+from mlia.transformers.registry import TransformRequest, transform_model
+from mlia.transformers.error import TransformerNotFoundError
 from mlia.utils.logging import log_action
 
 logger = logging.getLogger(__name__)
-
-
-def _get_converter(name: str) -> Any:
-    """Load a converter plugin by name."""
-    registry = ConverterRegistry()
-    load_converter_plugins(registry)
-    converter = registry.get(name)
-    if converter is None:
-        if name == "pt2_to_pte":
-            raise ConfigurationError(
-                "PyTorch to PTE conversion requires the "
-                "'mlia-converters-pytorch' plugin to be installed."
-            )
-        raise ConfigurationError(f"Converter '{name}' is not available.")
-    return converter
 
 
 @dataclass
@@ -308,14 +293,30 @@ class CorstonePerformanceEstimator(
                 "PyTorch .pt2 files that can be converted to .pte."
             )
 
-        converter = _get_converter("pt2_to_pte")
         executorch_target_config = self._build_executorch_target_config()
         try:
-            return converter(
-                model_path,
-                self.context.output_dir,
-                executorch_target_config,
+            return transform_model(
+                TransformRequest(
+                    model=model_path,
+                    output_dir=self.context.output_dir,
+                    target_format="pte",
+                    transform_options={
+                        "executorch_target_config": executorch_target_config,
+                    },
+                )
             )
+
+        except TransformerNotFoundError as err:
+            err.args = (
+                f"{err}\n"
+                "PyTorch to PTE conversion could not be resolved. "
+                "Try installing the 'mlia-converters-pytorch' plugin.",
+            )
+            raise
+        except ConfigurationError as err:
+            raise ConfigurationError(
+                f"Unable to convert PyTorch model {model_path} to .pte."
+            ) from err
         except Exception as err:
             raise ConfigurationError(
                 f"Unable to convert PyTorch model {model_path} to .pte."

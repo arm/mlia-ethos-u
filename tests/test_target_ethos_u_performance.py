@@ -21,6 +21,8 @@ from mlia.target.ethos_u.performance import (
     merge_performance_outputs,
 )
 from mlia.target.ethos_u.utils.tflite_shims import ModelConfiguration
+from mlia.transformers.error import TransformerNotFoundError
+from mlia.transformers.registry import TransformRequest
 
 
 def test_performance_metrics_to_standardized_output_without_corstone_metrics(
@@ -236,9 +238,78 @@ def test_corstone_performance_estimator_prepares_pte_without_conversion(
     model_path = tmp_path / "model.pte"
     model_path.write_text("mock executorch model")
 
-    assert (
-        estimator._prepare_executorch_model(model_path) == model_path  # pylint: disable=protected-access
+    assert estimator._prepare_executorch_model(model_path) == model_path
+
+
+def test_corstone_performance_estimator_converts_pt2_via_transformer(
+    sample_context, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """PyTorch inputs should use the transformer registry path used by Vela."""
+    target_cfg = EthosUConfiguration.load_profile("ethos-u55-256")
+    estimator = CorstonePerformanceEstimator(
+        sample_context, target_cfg, backend="corstone-300"
     )
+
+    model_path = tmp_path / "model.pt2"
+    model_path.write_text("mock pytorch export")
+    converted_path = tmp_path / "model.pte"
+
+    transform_mock = MagicMock(return_value=converted_path)
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.performance.transform_model",
+        transform_mock,
+    )
+
+    result = estimator._prepare_executorch_model(model_path)
+
+    transform_mock.assert_called_once()
+    request = transform_mock.call_args.args[0]
+    assert request == TransformRequest(
+        model=model_path,
+        output_dir=sample_context.output_dir,
+        target_format="pte",
+        transform_options={
+            "executorch_target_config": {
+                "target": target_cfg.target,
+                "mac": target_cfg.mac,
+                "system_config": target_cfg.compiler_options.system_config,
+                "memory_mode": target_cfg.compiler_options.memory_mode,
+            }
+        },
+    )
+    assert result == converted_path
+
+
+def test_corstone_performance_estimator_reports_missing_pt2_to_pte_transformer(
+    sample_context, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Missing PT2->PTE transformer should report the plugin requirement."""
+    target_cfg = EthosUConfiguration.load_profile("ethos-u55-256")
+    estimator = CorstonePerformanceEstimator(
+        sample_context, target_cfg, backend="corstone-300"
+    )
+
+    model_path = tmp_path / "model.pt2"
+    model_path.write_text("mock pytorch export")
+
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.performance.transform_model",
+        MagicMock(
+            side_effect=TransformerNotFoundError(
+                "Transformer for model is not available."
+            )
+        ),
+    )
+
+    with pytest.raises(
+        TransformerNotFoundError,
+        match=(
+            "Transformer for model is not available\\.\n"
+            "PyTorch to PTE conversion could not be resolved\\. "
+            "Try installing the 'mlia-converters-pytorch' plugin\\."
+        ),
+    ):
+        estimator._prepare_executorch_model(model_path)
 
 
 def test_ethosu_performance_estimator_rejects_unsupported_backend(

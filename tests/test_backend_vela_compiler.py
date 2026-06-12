@@ -12,7 +12,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from mlia.core.errors import ConfigurationError
+import mlia.backend.vela.compiler as vela_compiler_module  # noqa: E402
+
 
 try:
     import ethosu.vela  # noqa: F401
@@ -25,7 +26,6 @@ else:
     # Only reference ethosu.vela if it was successfully imported
     _ = ethosu.vela
 
-import mlia.backend.vela.compiler as vela_compiler_module  # noqa: E402
 from mlia.backend.vela.compiler import (
     VelaCompiler,  # noqa: E402
     VelaCompilerOptions,  # noqa: E402
@@ -37,6 +37,7 @@ from mlia.backend.vela.compiler import (
     parse_vela_initialisation_file,  # noqa: E402
     resolve_compiler_config,  # noqa: E402
 )
+from mlia.core.errors import ConfigurationError  # noqa: E402
 from mlia.target.ethos_u.config import EthosUConfiguration  # noqa: E402
 
 
@@ -50,7 +51,7 @@ def patch_vela_main(monkeypatch: pytest.MonkeyPatch, main_mock: Any) -> None:
     )
 
 
-def test_default_vela_compiler(test_tflite_model: Path, tmp_path: Path) -> None:
+def test_default_vela_compiler(tmp_path: Path) -> None:
     """Test default Vela compiler instance."""
     default_compiler_options = VelaCompilerOptions(
         accelerator_config="ethos-u55-256", output_dir=tmp_path
@@ -67,10 +68,6 @@ def test_default_vela_compiler(test_tflite_model: Path, tmp_path: Path) -> None:
     assert default_compiler.cpu_tensor_alignment == 16
     assert default_compiler.optimization_strategy == "Performance"
     assert default_compiler.output_dir == tmp_path
-    assert not default_compiler.read_model(test_tflite_model).optimized
-
-    with pytest.raises(RuntimeError, match="Unable to read model"):
-        _ = default_compiler.read_model("bad_model.tflite")
 
     with pytest.raises(
         ValueError, match="System Config: internal-default not present in vela.ini file"
@@ -765,162 +762,50 @@ def test_preprocess_model_tosa_passthrough() -> None:
     assert result == tosa_path
 
 
-def test_preprocess_model_non_pytorch_does_not_load_plugin(
-    monkeypatch: Any,
-) -> None:
-    """Test that non-PyTorch inputs do not trigger plugin loading."""
+def test_preprocess_model_tosamlir_passthrough() -> None:
+    """Test that TOSA MLIR files pass through preprocessing unchanged."""
     compiler_options = VelaCompilerOptions(accelerator_config="ethos-u55-256")
     compiler = VelaCompiler(compiler_options)
 
-    load_mock = MagicMock()
-    monkeypatch.setattr(vela_compiler_module, "_get_converter", load_mock)
+    tosamlir_path = Path("model.tosamlir")
+    result = compiler._preprocess_model(tosamlir_path)
 
-    _ = compiler._preprocess_model(Path("model.tflite"))
-    _ = compiler._preprocess_model(Path("model.tosa"))
-
-    load_mock.assert_not_called()
+    assert result == tosamlir_path
 
 
-def test_preprocess_model_pytorch_conversion(monkeypatch: Any) -> None:
-    """Test that PyTorch files trigger conversion to TOSA."""
-    compiler_options = VelaCompilerOptions(
-        accelerator_config="ethos-u55-256", output_dir=Path("test_output")
-    )
-    compiler = VelaCompiler(compiler_options)
-
-    expected_tosa_path = Path("test_output/model.tosa")
-    mock_convert = MagicMock(return_value=expected_tosa_path)
-    monkeypatch.setattr(compiler, "_convert_pytorch_to_tosa", mock_convert)
-
-    pt2_path = Path("model.pt2")
-    result = compiler._preprocess_model(pt2_path)
-
-    assert result == expected_tosa_path
-    mock_convert.assert_called_once_with(pt2_path, compiler.output_dir)
-
-
-def test_convert_pytorch_to_tosa_conversion_failure(monkeypatch: Any) -> None:
-    """Test error handling when PyTorch to TOSA conversion fails."""
-    mock_converter = MagicMock(side_effect=Exception("Conversion failed"))
-    monkeypatch.setattr(
-        vela_compiler_module,
-        "_get_converter",
-        MagicMock(return_value=mock_converter),
-    )
-
-    with tempfile.TemporaryDirectory() as temp_dir:
-        pytorch_model = Path(temp_dir) / "model.pt2"
-        pytorch_model.write_text("sample", encoding="utf8")
-
-        with pytest.raises(RuntimeError, match="Failed to convert PyTorch model"):
-            VelaCompiler._convert_pytorch_to_tosa(pytorch_model, Path("output"))
-
-
-def test_convert_pytorch_to_tosa_missing_plugin(monkeypatch: Any) -> None:
-    """Test error messaging when PyTorch plugin is missing."""
-    monkeypatch.setattr(
-        vela_compiler_module,
-        "_get_converter",
-        MagicMock(
-            side_effect=ConfigurationError(
-                "PyTorch conversion requires the 'mlia-converters-pytorch' plugin "
-                "to be installed."
-            )
-        ),
-    )
-
-    with tempfile.TemporaryDirectory() as temp_dir:
-        pytorch_model = Path(temp_dir) / "model.pt2"
-        pytorch_model.write_text("sample", encoding="utf8")
-
-        with pytest.raises(ConfigurationError, match="mlia-converters-pytorch"):
-            VelaCompiler._convert_pytorch_to_tosa(pytorch_model, Path("output"))
-
-
-@pytest.mark.parametrize(
-    "file_extension",
-    [".tflite", ".tosa"],
-)
-def test_compile_model_with_supported_formats(
-    file_extension: str, test_resources_path: Path, tmp_path: Path
+def test_preprocess_model_pt2_builds_transform_request(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Test that compile_model preprocessing works with TFLite and TOSA files."""
-    vela_ini_path = str(test_resources_path / "vela/sample_vela.ini")
-
-    compiler_options = VelaCompilerOptions(
-        config_file=vela_ini_path,
-        system_config="Ethos_U65_High_End",
-        memory_mode="Shared_Sram",
-        accelerator_config="ethos-u65-256",
-        output_dir=tmp_path,
-    )
-    compiler = VelaCompiler(compiler_options)
-
-    test_model_path = Path(f"test_model{file_extension}")
-
-    result = compiler._preprocess_model(test_model_path)
-    assert result == test_model_path
-    assert result.suffix == file_extension
-
-
-def test_read_model_with_pytorch_file(
-    monkeypatch: Any, test_resources_path: Path, tmp_path: Path
-) -> None:
-    """Test read_model with PyTorch file triggers compilation first."""
-    vela_ini_path = str(test_resources_path / "vela/sample_vela.ini")
-
-    compiler_options = VelaCompilerOptions(
-        config_file=vela_ini_path,
-        system_config="Ethos_U65_High_End",
-        memory_mode="Shared_Sram",
-        accelerator_config="ethos-u65-256",
-        output_dir=tmp_path,
-    )
-    compiler = VelaCompiler(compiler_options)
-
-    mock_summary = MagicMock()
-    mock_compiled_path = tmp_path / "model_vela.tflite"
-    mock_compile = MagicMock(return_value=(mock_summary, mock_compiled_path))
-    monkeypatch.setattr(compiler, "compile_model", mock_compile)
-
-    mock_nng = MagicMock()
-    mock_network_type = MagicMock()
-    monkeypatch.setattr(
-        compiler, "_read_model", MagicMock(return_value=(mock_nng, mock_network_type))
-    )
-
-    pytorch_file = tmp_path / "model.pt2"
-    pytorch_file.write_text("mock")
-    preprocessed_file = tmp_path / "model.tflite"
-
-    monkeypatch.setattr(
-        compiler, "_preprocess_model", MagicMock(return_value=preprocessed_file)
-    )
-
-    model = compiler.read_model(pytorch_file)
-
-    mock_compile.assert_called_once()
-    assert model.nng == mock_nng
-    assert model.network_type == mock_network_type
-
-
-def test_compile_model_with_invalid_pytorch_conversion(
-    monkeypatch: Any, tmp_path: Path
-) -> None:
-    """Test compile_model error handling when PyTorch conversion fails."""
+    """Test that PyTorch inputs build the expected transform request."""
     compiler_options = VelaCompilerOptions(
         accelerator_config="ethos-u55-256", output_dir=tmp_path
     )
     compiler = VelaCompiler(compiler_options)
 
-    monkeypatch.setattr(
-        compiler,
-        "_convert_pytorch_to_tosa",
-        MagicMock(side_effect=RuntimeError("Conversion failed")),
-    )
+    pt2_path = tmp_path / "model.pt2"
+    converted_path = tmp_path / "model.tosa"
 
-    pytorch_file = tmp_path / "model.pt2"
-    pytorch_file.write_text("mock")
+    transform_mock = MagicMock(return_value=converted_path)
+    monkeypatch.setattr("mlia.backend.vela.compiler.transform_model", transform_mock)
 
-    with pytest.raises(RuntimeError, match="Conversion failed"):
-        compiler.compile_model(pytorch_file)
+    result = compiler._preprocess_model(pt2_path)
+
+    transform_mock.assert_called_once()
+    request = transform_mock.call_args.args[0]
+    assert request.model == pt2_path
+    assert request.target_format == "tosa"
+    assert request.output_dir == tmp_path
+    assert request.transform_options == {}
+    assert result == converted_path
+
+
+def test_preprocess_model_unsupported_model_returns_error() -> None:
+    """Test that unsupported models raise when no converter is available."""
+
+    compiler_options = VelaCompilerOptions(accelerator_config="ethos-u55-256")
+    compiler = VelaCompiler(compiler_options)
+
+    fake_model = Path("path/to/fake/model.crungle")
+
+    with pytest.raises(ConfigurationError):
+        compiler._preprocess_model(fake_model)
