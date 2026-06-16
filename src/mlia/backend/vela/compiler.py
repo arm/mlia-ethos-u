@@ -133,6 +133,38 @@ class VelaSummary:
     system_config: str
     accelerator_configuration: str
     arena_cache_size: float
+    sram_bandwidth: float | None = None
+    dram_bandwidth: float | None = None
+    on_chip_flash_bandwidth: float | None = None
+    off_chip_flash_bandwidth: float | None = None
+    inferences_per_second: float | None = None
+    inference_time: float | None = None
+    passes_before_fusing: float | None = None
+    passes_after_fusing: float | None = None
+    total_original_weights: float | None = None
+    total_npu_encoded_weights: float | None = None
+    sram_feature_map_read_bytes: float | None = None
+    sram_feature_map_write_bytes: float | None = None
+    sram_weight_read_bytes: float | None = None
+    sram_weight_write_bytes: float | None = None
+    sram_total_bytes: float | None = None
+    dram_feature_map_read_bytes: float | None = None
+    dram_feature_map_write_bytes: float | None = None
+    dram_weight_read_bytes: float | None = None
+    dram_weight_write_bytes: float | None = None
+    dram_total_bytes: float | None = None
+    on_chip_flash_feature_map_read_bytes: float | None = None
+    on_chip_flash_feature_map_write_bytes: float | None = None
+    on_chip_flash_weight_read_bytes: float | None = None
+    on_chip_flash_weight_write_bytes: float | None = None
+    on_chip_flash_total_bytes: float | None = None
+    off_chip_flash_feature_map_read_bytes: float | None = None
+    off_chip_flash_feature_map_write_bytes: float | None = None
+    off_chip_flash_weight_read_bytes: float | None = None
+    off_chip_flash_weight_write_bytes: float | None = None
+    off_chip_flash_total_bytes: float | None = None
+    nn_macs: float | None = None
+    nn_tops: float | None = None
 
     def __repr__(self) -> str:
         """Return String Representation of VelaSummary object."""
@@ -163,6 +195,7 @@ complete_summary_metrics = [
     ("batch_size", "batch_size"),
     ("inference_time", "inference_time"),
     ("passes_before_fusing", "passes_before_fusing"),
+    ("passes_after_fusing", "passes_after_fusing"),
     ("sram_memory_used", "sram_memory_used"),
     ("dram_memory_used", "dram_memory_used"),
     (
@@ -172,6 +205,15 @@ complete_summary_metrics = [
     ("off_chip_flash_memory_used", "off_chip_flash_memory_used"),
     ("total_original_weights", "total_original_weights"),
     ("total_npu_encoded_weights", "total_npu_encoded_weights"),
+    ("sram_feature_map_read_bytes", "sram_feature_map_read_bytes"),
+    ("sram_feature_map_write_bytes", "sram_feature_map_write_bytes"),
+    ("sram_weight_read_bytes", "sram_weight_read_bytes"),
+    ("sram_weight_write_bytes", "sram_weight_write_bytes"),
+    ("sram_total_bytes", "sram_total_bytes"),
+    ("dram_feature_map_read_bytes", "dram_feature_map_read_bytes"),
+    ("dram_feature_map_write_bytes", "dram_feature_map_write_bytes"),
+    ("dram_weight_read_bytes", "dram_weight_read_bytes"),
+    ("dram_weight_write_bytes", "dram_weight_write_bytes"),
     ("dram_total_bytes", "dram_total_bytes"),
     (
         "on_chip_flash_feature_map_read_bytes",
@@ -207,6 +249,24 @@ summary_metrics = [
     if summary_metric[0] in OUTPUT_METRICS
 ]
 summary_metrics.sort(key=lambda e: OUTPUT_METRICS.index(e[0]))
+
+# Some Vela summary fields are optional in the parsed model because backend
+# output can omit them or leave them blank. Required fields still raise an
+# error so unexpected CSV changes are noticed.
+_OPTIONAL_SUMMARY_METRICS = {
+    field.name for field in fields(VelaSummary) if "|" in str(field.type)
+}
+_SUMMARY_FIELD_TYPES = {field.name: str(field.type) for field in fields(VelaSummary)}
+_SUMMARY_VALUE_CONVERTERS = {"float": float, "int": int, "str": str}
+
+
+def _convert_summary_value(field_name: str, raw_value: str) -> int | float | str | None:
+    """Convert a Vela summary CSV value for the matching dataclass field."""
+    if raw_value == "" and field_name in _OPTIONAL_SUMMARY_METRICS:
+        return None
+
+    type_name = _SUMMARY_FIELD_TYPES[field_name].split("|", maxsplit=1)[0].strip()
+    return _SUMMARY_VALUE_CONVERTERS[type_name](raw_value)
 
 
 @dataclass
@@ -521,13 +581,15 @@ def parse_summary_csv_file(vela_summary_csv_file: Path) -> VelaSummary:
         except StopIteration as err:
             raise RuntimeError("Generated Vela Summary CSV is empty") from err
         try:
-            key_types = {
-                field.name: eval(field.type)  # type: ignore[arg-type]
-                for field in fields(VelaSummary)
-            }
-            summary_data = VelaSummary(
-                **{key: key_types[key](row[title]) for key, title in summary_metrics}
-            )
+            summary_values: dict[str, Any] = {}
+            for key, title in summary_metrics:
+                if title in row:
+                    summary_values[key] = _convert_summary_value(key, row[title])
+                elif key in _OPTIONAL_SUMMARY_METRICS:
+                    summary_values[key] = None
+                else:
+                    raise KeyError(title)
+            summary_data = VelaSummary(**summary_values)
         except KeyError as err:
             raise KeyError(
                 f"Generated Vela Summary CSV missing expected header: {err.args[0]}."

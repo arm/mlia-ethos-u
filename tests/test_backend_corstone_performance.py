@@ -726,6 +726,12 @@ def test_performance_metrics_to_standardized_output(
         "value": pytest.approx(((150 * 300) + (180 * 100)) / (300 + 100)),
         "unit": schema.UNIT_BYTES,
     }
+    assert metrics_dict[schema.METRIC_NAME_MODEL_WEIGHT_MEMORY] == {
+        "name": schema.METRIC_NAME_MODEL_WEIGHT_MEMORY,
+        "unit": schema.UNIT_BYTES,
+        "availability": "unavailable",
+        "reason": "Model weight memory data is not available.",
+    }
     for metric_name, unit in (
         (schema.METRIC_NAME_ACCELERATOR_OPERATOR_PERCENTAGE, schema.UNIT_PERCENT),
         (schema.METRIC_NAME_INFERENCES_PER_SECOND, schema.UNIT_INFERENCES_PER_SECOND),
@@ -746,6 +752,209 @@ def test_performance_metrics_to_standardized_output(
         {"name": "staging_usage", "value": 150.0, "unit": "bytes"},
         {"name": "op_cycles", "value": 300.0, "unit": "cycles"},
     ]
+
+
+@pytest.mark.parametrize(
+    "backend_name, target_config, model_stats, expected_metrics",
+    [
+        (
+            "corstone-300",
+            {"mac": 256, "target": "ethos-u55"},
+            CorstoneModelPerformanceMetrics(
+                npu_active_cycles=1000,
+                npu_idle_cycles=500,
+                npu_total_cycles=1500,
+                npu_axi0_rd_data_beat_received=200,
+                npu_axi0_wr_data_beat_written=100,
+                npu_axi1_rd_data_beat_received=150,
+                npu_axi1_wr_data_beat_written=None,
+            ),
+            {
+                "npu_active_cycles": {
+                    "name": "npu_active_cycles",
+                    "value": 1000,
+                    "unit": "cycles",
+                },
+                "npu_idle_cycles": {
+                    "name": "npu_idle_cycles",
+                    "value": 500,
+                    "unit": "cycles",
+                },
+                "npu_total_cycles": {
+                    "name": "npu_total_cycles",
+                    "value": 1500,
+                    "unit": "cycles",
+                },
+                "npu_axi0_rd_data_beat_received": {
+                    "name": "npu_axi0_rd_data_beat_received",
+                    "value": 200,
+                    "unit": "beats",
+                },
+                "npu_axi0_wr_data_beat_written": {
+                    "name": "npu_axi0_wr_data_beat_written",
+                    "value": 100,
+                    "unit": "beats",
+                },
+                "npu_axi1_rd_data_beat_received": {
+                    "name": "npu_axi1_rd_data_beat_received",
+                    "value": 150,
+                    "unit": "beats",
+                },
+            },
+        ),
+        (
+            "corstone-320",
+            {"mac": 1024, "target": "ethos-u85"},
+            CorstoneModelPerformanceMetrics(
+                npu_active_cycles=2000,
+                npu_idle_cycles=50,
+                npu_total_cycles=2050,
+                npu_axi0_rd_data_beat_received=250,
+                npu_axi0_wr_data_beat_written=120,
+                npu_axi1_rd_data_beat_received=300,
+                npu_axi1_wr_data_beat_written=80,
+            ),
+            {
+                "npu_active_cycles": {
+                    "name": "npu_active_cycles",
+                    "value": 2000,
+                    "unit": "cycles",
+                },
+                "npu_idle_cycles": {
+                    "name": "npu_idle_cycles",
+                    "value": 50,
+                    "unit": "cycles",
+                },
+                "npu_total_cycles": {
+                    "name": "npu_total_cycles",
+                    "value": 2050,
+                    "unit": "cycles",
+                },
+                "npu_axi0_rd_data_beat_received": {
+                    "name": "npu_axi0_rd_data_beat_received",
+                    "value": 250,
+                    "unit": "beats",
+                },
+                "npu_axi0_wr_data_beat_written": {
+                    "name": "npu_axi0_wr_data_beat_written",
+                    "value": 120,
+                    "unit": "beats",
+                },
+                "npu_axi1_rd_data_beat_received": {
+                    "name": "npu_axi1_rd_data_beat_received",
+                    "value": 300,
+                    "unit": "beats",
+                },
+                "npu_axi1_wr_data_beat_written": {
+                    "name": "npu_axi1_wr_data_beat_written",
+                    "value": 80,
+                    "unit": "beats",
+                },
+            },
+        ),
+    ],
+    ids=["corstone-300", "corstone-320"],
+)
+def test_performance_metrics_emits_corstone_model_counters(
+    backend_name: str,
+    target_config: dict[str, int | str],
+    model_stats: CorstoneModelPerformanceMetrics,
+    expected_metrics: dict[str, dict[str, int | str]],
+    tmp_path: Path,
+) -> None:
+    """Corstone model-level FVP counters should remain integer JSON values."""
+    perf_metrics = CorstonePerformanceMetrics(model_stats, [])
+    model_file = tmp_path / "model.tflite"
+    model_file.write_bytes(b"test model content")
+
+    output = perf_metrics.to_standardized_output(
+        model_path=model_file,
+        backend_name=backend_name,
+        target_config=target_config,
+    )
+
+    metrics = {metric["name"]: metric for metric in output["results"][0]["metrics"]}
+    assert {name: metrics[name] for name in expected_metrics} == expected_metrics
+    assert isinstance(metrics["npu_active_cycles"]["value"], int)
+    assert isinstance(metrics["npu_idle_cycles"]["value"], int)
+    assert isinstance(metrics["npu_total_cycles"]["value"], int)
+    assert metrics[schema.METRIC_NAME_MODEL_WEIGHT_MEMORY] == {
+        "name": schema.METRIC_NAME_MODEL_WEIGHT_MEMORY,
+        "unit": schema.UNIT_BYTES,
+        "availability": "unavailable",
+        "reason": "Model weight memory data is not available.",
+    }
+
+
+def test_performance_metrics_preserves_supported_corstone_layer_statistics(
+    tmp_path: Path,
+) -> None:
+    """Supported numeric Corstone per-layer CSV fields should become metrics."""
+    perf_metrics = CorstonePerformanceMetrics(
+        CorstoneModelPerformanceMetrics(
+            npu_active_cycles=1000,
+            npu_idle_cycles=500,
+            npu_total_cycles=1500,
+            npu_axi0_rd_data_beat_received=200,
+            npu_axi0_wr_data_beat_written=100,
+            npu_axi1_rd_data_beat_received=150,
+            npu_axi1_wr_data_beat_written=None,
+        ),
+        [
+            {
+                "Original Operator": "Conv2D",
+                "NNG Operator": "Conv2DBias",
+                "Target": "NPU",
+                "Staging Usage": "150",
+                "Peak% (Staging)": "40",
+                "Op Cycles": "300",
+                "Network% (cycles)": "30",
+                "NPU": "300",
+                "SRAM AC": "70",
+                "DRAM AC": "20",
+                "OnFlash AC": "0",
+                "OffFlash AC": "0",
+                "MAC Count": "1500",
+                "Network% (MAC)": "18",
+                "Util% (MAC)": "35",
+                "SRAM Usage": "160",
+                "Peak%": "50",
+                "Network%": "32",
+                "Util%": "36",
+                "Name": "loc0",
+            }
+        ],
+    )
+    model_file = tmp_path / "model.tflite"
+    model_file.write_bytes(b"test model content")
+
+    output = perf_metrics.to_standardized_output(
+        model_path=model_file,
+        backend_name="corstone-320",
+        target_config={"mac": 1024, "target": "ethos-u85"},
+    )
+
+    breakdown = output["results"][0]["breakdowns"][0]
+    assert breakdown["name"] == "Conv2DBias"
+    assert breakdown["location"] == "loc0"
+    assert {metric["name"]: metric for metric in breakdown["metrics"]} == {
+        "staging_usage": {"name": "staging_usage", "value": 150.0, "unit": "bytes"},
+        "peak_staging": {"name": "peak_staging", "value": 40.0, "unit": "%"},
+        "op_cycles": {"name": "op_cycles", "value": 300.0, "unit": "cycles"},
+        "network_cycles": {"name": "network_cycles", "value": 30.0, "unit": "%"},
+        "npu": {"name": "npu", "value": 300.0, "unit": "cycles"},
+        "sram_ac": {"name": "sram_ac", "value": 70.0, "unit": "accesses"},
+        "dram_ac": {"name": "dram_ac", "value": 20.0, "unit": "accesses"},
+        "onflash_ac": {"name": "onflash_ac", "value": 0.0, "unit": "accesses"},
+        "offflash_ac": {"name": "offflash_ac", "value": 0.0, "unit": "accesses"},
+        "mac_count": {"name": "mac_count", "value": 1500.0, "unit": "operations"},
+        "network_mac": {"name": "network_mac", "value": 18.0, "unit": "%"},
+        "util_mac": {"name": "util_mac", "value": 35.0, "unit": "%"},
+        "sram_usage": {"name": "sram_usage", "value": 160.0, "unit": "bytes"},
+        "peak": {"name": "peak", "value": 50.0, "unit": "%"},
+        "network": {"name": "network", "value": 32.0, "unit": "%"},
+        "util": {"name": "util", "value": 36.0, "unit": "%"},
+    }
 
 
 def test_performance_metrics_to_standardized_output_with_null_axi1_wr(
@@ -786,6 +995,7 @@ def test_performance_metrics_to_standardized_output_with_null_axi1_wr(
     assert schema.METRIC_NAME_TARGET_UTILIZATION in metric_names
     assert schema.METRIC_NAME_INFERENCES_PER_SECOND in metric_names
     for metric_name in (
+        schema.METRIC_NAME_MODEL_WEIGHT_MEMORY,
         schema.METRIC_NAME_PEAK_ACTIVATION_MEMORY,
         schema.METRIC_NAME_AVERAGE_MEMORY,
     ):

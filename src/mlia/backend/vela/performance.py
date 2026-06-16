@@ -8,7 +8,7 @@ import csv
 import logging
 import os
 from collections import Counter
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -25,6 +25,80 @@ from mlia.utils.filesystem import sha256
 logger = logging.getLogger(__name__)
 
 _VELA_VERSION_CACHE: str | None = None
+
+_VELA_SUMMARY_METRIC_UNITS = {
+    "inference_time": "seconds",
+    "sram_memory_used": "bytes",
+    "dram_memory_used": "bytes",
+    "on_chip_flash_memory_used": "bytes",
+    "off_chip_flash_memory_used": "bytes",
+    "total_original_weights": "bytes",
+    "total_npu_encoded_weights": "bytes",
+    "sram_feature_map_read_bytes": "bytes",
+    "sram_feature_map_write_bytes": "bytes",
+    "sram_weight_read_bytes": "bytes",
+    "sram_weight_write_bytes": "bytes",
+    "sram_total_bytes": "bytes",
+    "dram_feature_map_read_bytes": "bytes",
+    "dram_feature_map_write_bytes": "bytes",
+    "dram_weight_read_bytes": "bytes",
+    "dram_weight_write_bytes": "bytes",
+    "dram_total_bytes": "bytes",
+    "on_chip_flash_feature_map_read_bytes": "bytes",
+    "on_chip_flash_feature_map_write_bytes": "bytes",
+    "on_chip_flash_weight_read_bytes": "bytes",
+    "on_chip_flash_weight_write_bytes": "bytes",
+    "on_chip_flash_total_bytes": "bytes",
+    "off_chip_flash_feature_map_read_bytes": "bytes",
+    "off_chip_flash_feature_map_write_bytes": "bytes",
+    "off_chip_flash_weight_read_bytes": "bytes",
+    "off_chip_flash_weight_write_bytes": "bytes",
+    "off_chip_flash_total_bytes": "bytes",
+    "nn_macs": "operations",
+    "nn_tops": "TOPS",
+}
+
+_VELA_RESULT_METRIC_ALIASES = {
+    "cycles_npu": "npu_cycles",
+    "cycles_sram_access": "sram_access_cycles",
+    "cycles_dram_access": "dram_access_cycles",
+    "cycles_on_chip_flash_access": "on_chip_flash_access_cycles",
+    "cycles_off_chip_flash_access": "off_chip_flash_access_cycles",
+    "cycles_total": "total_cycles",
+    "inferences_per_second": "inferences_per_second",
+}
+
+_VELA_OPTIONAL_LAYER_METRIC_UNITS = {
+    "peak_sram_usage_percentage": schema.UNIT_PERCENT,
+    "op_cycles_network_percentage": schema.UNIT_PERCENT,
+    "mac_count_network_percentage": schema.UNIT_PERCENT,
+}
+
+_VELA_MODEL_WEIGHT_MEMORY_SOURCE_METRIC_NAME = "total_npu_encoded_weights"
+
+
+def _byte_count_value(value: int | float) -> int | float:
+    """Return integral byte counts as integers."""
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return value
+
+
+def _model_weight_memory_metric(
+    metrics: list[schema.Metric],
+) -> schema.Metric | None:
+    """Return the standard model weight memory metric from Vela encoded weights."""
+    for metric in metrics:
+        if metric.name != _VELA_MODEL_WEIGHT_MEMORY_SOURCE_METRIC_NAME:
+            continue
+        if metric.value is None:
+            return None
+        return schema.Metric(
+            name=schema.METRIC_NAME_MODEL_WEIGHT_MEMORY,
+            value=_byte_count_value(metric.value),
+            unit=schema.UNIT_BYTES,
+        )
+    return None
 
 
 def _average_memory_usage(layerwise_info: LayerwisePerfInfo) -> float | None:
@@ -90,6 +164,7 @@ class PerformanceMetrics:
     on_chip_flash_memory_area_size: float
     off_chip_flash_memory_area_size: float
     layerwise_performance_info: LayerwisePerfInfo
+    additional_summary_metrics: list[schema.Metric] = field(default_factory=list)
 
     def to_standardized_output(
         self,
@@ -236,6 +311,22 @@ class PerformanceMetrics:
                 ),
             ]
         )
+        existing_metric_names = {metric.name for metric in model_metrics}
+        for metric in self.additional_summary_metrics:
+            if metric.name in existing_metric_names:
+                continue
+            model_metrics.append(metric)
+            existing_metric_names.add(metric.name)
+        # Add the standardized model weight metric separately because it is
+        # derived from the Vela encoded-weight metric preserved above.
+        model_weight_memory_metric = _model_weight_memory_metric(
+            self.additional_summary_metrics
+        )
+        if (
+            model_weight_memory_metric is not None
+            and model_weight_memory_metric.name not in existing_metric_names
+        ):
+            model_metrics.append(model_weight_memory_metric)
         peak_memory_usage = _peak_memory_usage(self.layerwise_performance_info)
         if peak_memory_usage is not None:
             model_metrics.append(
@@ -257,7 +348,9 @@ class PerformanceMetrics:
         model_metrics = schema.ensure_standard_performance_metrics(model_metrics)
 
         breakdowns = []
-        for layer_info in self.layerwise_performance_info.layerwise_info:
+        for layer_index, layer_info in enumerate(
+            self.layerwise_performance_info.layerwise_info
+        ):
             breakdown_metrics = [
                 schema.Metric(
                     name="op_cycles",
@@ -305,6 +398,14 @@ class PerformanceMetrics:
                     unit="percent",
                 ),
             ]
+            if layer_index < len(
+                self.layerwise_performance_info.additional_layer_metrics
+            ):
+                breakdown_metrics.extend(
+                    self.layerwise_performance_info.additional_layer_metrics[
+                        layer_index
+                    ]
+                )
             breakdowns.append(
                 schema.Breakdown(
                     scope=schema.OperatorScope.OPERATOR,
@@ -363,15 +464,16 @@ class LayerwisePerfInfo:
     """Contains all the per-layer metrics from the per-layer csv file from Vela."""
 
     layerwise_info: list[LayerPerfInfo]
+    additional_layer_metrics: list[list[schema.Metric]] = field(default_factory=list)
 
 
 complete_layer_metrics = [
     ("tflite_operator", ["TFLite_operator", "Original Operator"], "TFLite Operator"),
     ("nng_operator", "NNG Operator", "NNG Operator"),
     ("sram_usage", ["SRAM Usage", "Staging Usage"], "SRAM Usage"),
-    ("peak_percentage", "Peak%", "Peak SRAM Usage (%)"),
+    ("peak_sram_usage_percentage", "Peak%", "Peak SRAM Usage (%)"),
     ("op_cycles", "Op Cycles", "OP Cycles"),
-    ("network_percentage_1", "Network%", "OP Cycles in Network (%)"),
+    ("op_cycles_network_percentage", "Network%", "OP Cycles in Network (%)"),
     ("npu_cycles", "NPU", "NPU Cycles"),
     ("sram_access_cycles", "SRAM AC", "SRAM AC"),
     ("dram_access_cycles", "DRAM AC", "DRAM AC"),
@@ -379,7 +481,7 @@ complete_layer_metrics = [
     ("off_chip_flash_access_cycles", "OffFlash AC", "OffFlash AC"),
     ("mac_count", "MAC Count", "MAC Count"),
     (
-        "network_percentage_2",
+        "mac_count_network_percentage",
         ["Network% (1)", "Network% (MAC)"],
         "MAC Count in Network (%)",
     ),
@@ -388,6 +490,7 @@ complete_layer_metrics = [
 ]
 
 OUTPUT_METRICS = [field.name for field in fields(LayerPerfInfo)]
+OPTIONAL_OUTPUT_METRICS = list(_VELA_OPTIONAL_LAYER_METRIC_UNITS)
 
 layer_metrics = [
     layer_metric
@@ -396,6 +499,14 @@ layer_metrics = [
 ]
 
 layer_metrics.sort(key=lambda e: OUTPUT_METRICS.index(e[0]))
+
+optional_layer_metrics = [
+    layer_metric
+    for layer_metric in complete_layer_metrics
+    if layer_metric[0] in OPTIONAL_OUTPUT_METRICS
+]
+
+optional_layer_metrics.sort(key=lambda e: OPTIONAL_OUTPUT_METRICS.index(e[0]))
 
 
 def extract_metrics_from_row(row_as_dict: dict, metrics: list, key_types: dict) -> dict:
@@ -423,11 +534,33 @@ def extract_metrics_from_row(row_as_dict: dict, metrics: list, key_types: dict) 
     return ids_to_metrics
 
 
+def _extract_optional_layer_metrics(row_as_dict: dict) -> list[schema.Metric]:
+    """Extract optional Vela per-layer metrics when the CSV includes them."""
+    metrics = []
+    for key, title_options, _ in optional_layer_metrics:
+        titles = title_options if isinstance(title_options, list) else [title_options]
+        for title in titles:
+            if title not in row_as_dict:
+                continue
+            if row_as_dict[title] == "":
+                continue
+            metrics.append(
+                schema.Metric(
+                    name=key,
+                    value=float(row_as_dict[title]),
+                    unit=_VELA_OPTIONAL_LAYER_METRIC_UNITS[key],
+                )
+            )
+            break
+    return metrics
+
+
 def parse_layerwise_perf_csv(vela_csv_file: Path, metrics: list) -> LayerwisePerfInfo:
     """Parse the per-layer csv file from backend vela."""
     if not vela_csv_file.is_file():
         raise FileNotFoundError(f"CSV File not found at {vela_csv_file}\n")
     layerwise_info = []  # type: list[LayerPerfInfo]
+    additional_layer_metrics = []  # type: list[list[schema.Metric]]
     with open(vela_csv_file, encoding="UTF-8") as csv_file:
         layerwise_reader = csv.reader(csv_file, delimiter=",")
         try:
@@ -459,15 +592,20 @@ def parse_layerwise_perf_csv(vela_csv_file: Path, metrics: list) -> LayerwisePer
                     row_as_dict, metrics, key_types
                 )
                 layer_info = LayerPerfInfo(**ids_to_metrics)
+                layer_metrics_from_row = _extract_optional_layer_metrics(row_as_dict)
                 if layer_info.op_cycles < 0:
                     raise ValueError(
                         "Per-layer CSV contains negative op_cycles "
                         f"for layer {layer_info.name!r}: {layer_info.op_cycles}"
                     )
                 layerwise_info.append(layer_info)
+                additional_layer_metrics.append(layer_metrics_from_row)
             except KeyError as err:
                 raise KeyError("Generated CSV missing expected headers") from err
-    return LayerwisePerfInfo(layerwise_info=layerwise_info)
+    return LayerwisePerfInfo(
+        layerwise_info=layerwise_info,
+        additional_layer_metrics=additional_layer_metrics,
+    )
 
 
 def estimate_performance(
@@ -538,4 +676,17 @@ def _performance_metrics(
         on_chip_flash_memory_area_size=float(summary_data.on_chip_flash_memory_used),
         off_chip_flash_memory_area_size=float(summary_data.off_chip_flash_memory_used),
         layerwise_performance_info=layerwise_performance_info,
+        additional_summary_metrics=_summary_metrics(summary_data),
     )
+
+
+def _summary_metrics(summary_data: VelaSummary) -> list[schema.Metric]:
+    """Return additional result-level metrics parsed from the Vela summary CSV."""
+    metrics = []
+    for field_name, unit in _VELA_SUMMARY_METRIC_UNITS.items():
+        source_name = _VELA_RESULT_METRIC_ALIASES.get(field_name, field_name)
+        value = getattr(summary_data, field_name, None)
+        if value is None:
+            continue
+        metrics.append(schema.Metric(name=source_name, value=value, unit=unit))
+    return metrics

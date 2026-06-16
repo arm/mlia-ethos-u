@@ -23,6 +23,7 @@ else:
 import mlia.backend.vela.compiler as vela_compiler_module  # noqa: E402
 import mlia.core.output_schema as schema
 from mlia.backend.vela.compiler import (
+    VelaCompilerOptions,
     VelaSummary,
     compile_model,  # noqa: E402
 )
@@ -64,6 +65,26 @@ class ExpectedBreakdown(TypedDict):
     name: str
     location: str
     metrics: dict[str, ExpectedMetric]
+
+
+class _FakeVelaCompiler:
+    """Small Vela compiler fake that returns prepared summary data."""
+
+    def __init__(self, summary_data: VelaSummary, compiled_model_path: Path) -> None:
+        self.summary_data = summary_data
+        self.compiled_model_path = compiled_model_path
+        self.model_path: Path | None = None
+        self.force_regeneration: bool | None = None
+
+    def compile_model(
+        self,
+        model_path: Path,
+        force_regeneration: bool = False,
+    ) -> tuple[VelaSummary, Path]:
+        """Record the compile call and return the prepared summary data."""
+        self.model_path = model_path
+        self.force_regeneration = force_regeneration
+        return self.summary_data, self.compiled_model_path
 
 
 def test_estimate_performance(test_tflite_model: Path) -> None:
@@ -129,6 +150,12 @@ LAYERWISE_MIXED_ALIAS_TMP_DATA_STR = """
 TFLite_operator,NNG Operator,Staging Usage,Peak%,Op Cycles,Network%,NPU,SRAM AC,DRAM AC,OnFlash AC,OffFlash AC,MAC Count,Network% (1),Util% (MAC),Name
 CONV_2D,Conv2DBias,11936,54.65201465201465,7312.0,17.648194632168373,7312.0,2000.0,0.0,0.0,0.0,73008,8.653353814644136,3.9002666849015313,sequential/conv1/Relu;sequential/conv1/Conv2D
 MAX_POOL_2D,MaxPool,10944,50.10989010989011,2992.0,7.22147132651091,1330.0,2992.0,0.0,0.0,0.0,6912,0.819252432155658,0.9024064171122994,sequential/max_pooling2d/MaxPool
+""".strip()  # noqa: E501
+
+LAYERWISE_REQUIRED_ONLY_TMP_DATA_STR = """
+TFLite_operator,NNG Operator,SRAM Usage,Op Cycles,NPU,SRAM AC,DRAM AC,OnFlash AC,OffFlash AC,MAC Count,Util%,Name
+CONV_2D,Conv2DBias,11936,7312.0,7312.0,2000.0,0.0,0.0,0.0,73008,3.9002666849015313,sequential/conv1/Relu;sequential/conv1/Conv2D
+MAX_POOL_2D,MaxPool,10944,2992.0,1330.0,2992.0,0.0,0.0,0.0,6912,0.9024064171122994,sequential/max_pooling2d/MaxPool
 """.strip()  # noqa: E501
 
 EXPECTED_ROWS = [
@@ -210,6 +237,59 @@ def test_parse_layerwise_csv_populates_fields_correctly(
                 assert got_val == pytest.approx(exp_val)
             else:
                 assert got_val == exp_val
+    additional_metrics = [
+        {metric.name: metric.to_dict() for metric in layer_metrics}
+        for layer_metrics in layerwise.additional_layer_metrics
+    ]
+    assert additional_metrics == [
+        {
+            "peak_sram_usage_percentage": {
+                "name": "peak_sram_usage_percentage",
+                "value": 54.65201465201465,
+                "unit": schema.UNIT_PERCENT,
+            },
+            "op_cycles_network_percentage": {
+                "name": "op_cycles_network_percentage",
+                "value": 17.648194632168373,
+                "unit": schema.UNIT_PERCENT,
+            },
+            "mac_count_network_percentage": {
+                "name": "mac_count_network_percentage",
+                "value": 8.653353814644136,
+                "unit": schema.UNIT_PERCENT,
+            },
+        },
+        {
+            "peak_sram_usage_percentage": {
+                "name": "peak_sram_usage_percentage",
+                "value": 50.10989010989011,
+                "unit": schema.UNIT_PERCENT,
+            },
+            "op_cycles_network_percentage": {
+                "name": "op_cycles_network_percentage",
+                "value": 7.22147132651091,
+                "unit": schema.UNIT_PERCENT,
+            },
+            "mac_count_network_percentage": {
+                "name": "mac_count_network_percentage",
+                "value": 0.819252432155658,
+                "unit": schema.UNIT_PERCENT,
+            },
+        },
+    ]
+
+
+def test_parse_layerwise_csv_omits_absent_optional_metrics(
+    test_csv_file: Path,
+) -> None:
+    """Vela layer CSVs may omit optional percentage columns."""
+    with open(test_csv_file, "w", encoding="utf8", newline="") as csv_file:
+        csv_file.write(LAYERWISE_REQUIRED_ONLY_TMP_DATA_STR)
+
+    layerwise = parse_layerwise_perf_csv(test_csv_file, layer_metrics)
+
+    assert layerwise.layerwise_info == [LayerPerfInfo(**row) for row in EXPECTED_ROWS]
+    assert layerwise.additional_layer_metrics == [[], []]
 
 
 LAYERWISE_TMP_DATA_MISSING_HEADER_STR = """
@@ -369,7 +449,45 @@ def _get_perf_metrics() -> PerformanceMetrics:
         ),
     ]
 
-    layerwise_perf_info = LayerwisePerfInfo(layerwise_info=layer_info)
+    layerwise_perf_info = LayerwisePerfInfo(
+        layerwise_info=layer_info,
+        additional_layer_metrics=[
+            [
+                schema.Metric(
+                    name="peak_sram_usage_percentage",
+                    value=54.65201465201465,
+                    unit=schema.UNIT_PERCENT,
+                ),
+                schema.Metric(
+                    name="op_cycles_network_percentage",
+                    value=17.648194632168373,
+                    unit=schema.UNIT_PERCENT,
+                ),
+                schema.Metric(
+                    name="mac_count_network_percentage",
+                    value=8.653353814644136,
+                    unit=schema.UNIT_PERCENT,
+                ),
+            ],
+            [
+                schema.Metric(
+                    name="peak_sram_usage_percentage",
+                    value=50.10989010989011,
+                    unit=schema.UNIT_PERCENT,
+                ),
+                schema.Metric(
+                    name="op_cycles_network_percentage",
+                    value=7.22147132651091,
+                    unit=schema.UNIT_PERCENT,
+                ),
+                schema.Metric(
+                    name="mac_count_network_percentage",
+                    value=0.819252432155658,
+                    unit=schema.UNIT_PERCENT,
+                ),
+            ],
+        ],
+    )
 
     return PerformanceMetrics(
         npu_cycles=10304,
@@ -386,6 +504,19 @@ def _get_perf_metrics() -> PerformanceMetrics:
         on_chip_flash_memory_area_size=0.0,
         off_chip_flash_memory_area_size=0.0,
         layerwise_performance_info=layerwise_perf_info,
+        additional_summary_metrics=[
+            schema.Metric(
+                name="total_original_weights",
+                value=16.0,
+                unit=schema.UNIT_BYTES,
+            ),
+            schema.Metric(
+                name="total_npu_encoded_weights",
+                value=8.0,
+                unit=schema.UNIT_BYTES,
+            ),
+            schema.Metric(name="dram_total_bytes", value=12.0, unit=schema.UNIT_BYTES),
+        ],
     )
 
 
@@ -463,6 +594,26 @@ def test_to_standardized_output(
         "value": pytest.approx(((11936 * 7312) + (10944 * 2992)) / (7312 + 2992)),
         "unit": schema.UNIT_BYTES,
     }
+    assert result_metrics[schema.METRIC_NAME_MODEL_WEIGHT_MEMORY] == {
+        "name": schema.METRIC_NAME_MODEL_WEIGHT_MEMORY,
+        "value": 8,
+        "unit": schema.UNIT_BYTES,
+    }
+    assert result_metrics["total_original_weights"] == {
+        "name": "total_original_weights",
+        "value": 16.0,
+        "unit": schema.UNIT_BYTES,
+    }
+    assert result_metrics["total_npu_encoded_weights"] == {
+        "name": "total_npu_encoded_weights",
+        "value": 8.0,
+        "unit": schema.UNIT_BYTES,
+    }
+    assert result_metrics["dram_total_bytes"] == {
+        "name": "dram_total_bytes",
+        "value": 12.0,
+        "unit": schema.UNIT_BYTES,
+    }
     for unavailable_metric in [
         schema.METRIC_NAME_ACCELERATOR_OPERATOR_PERCENTAGE,
         schema.METRIC_NAME_CPU_UTILIZATION,
@@ -504,7 +655,22 @@ def test_to_standardized_output(
                     "unit": "cycles",
                 },
                 "sram_usage": {"name": "sram_usage", "value": 11936, "unit": "bytes"},
+                "peak_sram_usage_percentage": {
+                    "name": "peak_sram_usage_percentage",
+                    "value": 54.65201465201465,
+                    "unit": schema.UNIT_PERCENT,
+                },
                 "mac_count": {"name": "mac_count", "value": 73008, "unit": "count"},
+                "op_cycles_network_percentage": {
+                    "name": "op_cycles_network_percentage",
+                    "value": 17.648194632168373,
+                    "unit": schema.UNIT_PERCENT,
+                },
+                "mac_count_network_percentage": {
+                    "name": "mac_count_network_percentage",
+                    "value": 8.653353814644136,
+                    "unit": schema.UNIT_PERCENT,
+                },
                 "util_mac_percentage": {
                     "name": "util_mac_percentage",
                     "value": 3.9002666849015313,
@@ -540,7 +706,22 @@ def test_to_standardized_output(
                     "unit": "cycles",
                 },
                 "sram_usage": {"name": "sram_usage", "value": 10944, "unit": "bytes"},
+                "peak_sram_usage_percentage": {
+                    "name": "peak_sram_usage_percentage",
+                    "value": 50.10989010989011,
+                    "unit": schema.UNIT_PERCENT,
+                },
                 "mac_count": {"name": "mac_count", "value": 6912, "unit": "count"},
+                "op_cycles_network_percentage": {
+                    "name": "op_cycles_network_percentage",
+                    "value": 7.22147132651091,
+                    "unit": schema.UNIT_PERCENT,
+                },
+                "mac_count_network_percentage": {
+                    "name": "mac_count_network_percentage",
+                    "value": 0.819252432155658,
+                    "unit": schema.UNIT_PERCENT,
+                },
                 "util_mac_percentage": {
                     "name": "util_mac_percentage",
                     "value": 0.9024064171122994,
@@ -559,6 +740,119 @@ def test_to_standardized_output(
         metrics = {m["name"]: m for m in breakdowns[i]["metrics"]}
         for metric_name, expected_metric in expected["metrics"].items():
             assert metrics[metric_name] == expected_metric
+
+
+def test_performance_metrics_preserves_vela_summary_statistics(
+    monkeypatch: pytest.MonkeyPatch,
+    test_tflite_model: Path,
+    tmp_path: Path,
+) -> None:
+    """Vela summary statistics should become result-level metrics."""
+    summary_data = VelaSummary(
+        cycles_total=2.0,
+        cycles_npu=1.0,
+        cycles_sram_access=0.0,
+        cycles_dram_access=0.0,
+        cycles_on_chip_flash_access=0.0,
+        cycles_off_chip_flash_access=0.0,
+        core_clock=10_000.0,
+        dram_memory_used=512.0,
+        sram_memory_used=1024.0,
+        on_chip_flash_memory_used=0.0,
+        off_chip_flash_memory_used=0.0,
+        batch_size=1,
+        memory_mode="Shared_Sram",
+        system_config="Ethos_U55_High_End_Embedded",
+        accelerator_configuration="Ethos_U55_256",
+        arena_cache_size=4096.0,
+        dram_bandwidth=4.0,
+        passes_before_fusing=7.0,
+        passes_after_fusing=2.0,
+        total_original_weights=64.0,
+        total_npu_encoded_weights=32.0,
+        dram_feature_map_read_bytes=16.0,
+        dram_weight_write_bytes=8.0,
+        nn_macs=128.0,
+        nn_tops=0.25,
+    )
+    compiler_options = VelaCompilerOptions(
+        accelerator_config="ethos-u55-256",
+        output_dir=tmp_path,
+    )
+    per_layer_csv = tmp_path / f"{test_tflite_model.stem}_per-layer.csv"
+    per_layer_csv.touch()
+    fake_vela_compiler = _FakeVelaCompiler(
+        summary_data,
+        tmp_path / "compiled.tflite",
+    )
+    mock_parse_layerwise_perf_csv = MagicMock(
+        return_value=LayerwisePerfInfo(layerwise_info=[])
+    )
+    # The summary metrics are attached inside estimate_performance, so this test
+    # replaces only the backend execution and per-layer parsing steps.
+    monkeypatch.setattr(
+        "mlia.backend.vela.compiler.VelaCompiler",
+        lambda _compiler_options: fake_vela_compiler,
+    )
+    monkeypatch.setattr(
+        "mlia.backend.vela.performance.parse_layerwise_perf_csv",
+        mock_parse_layerwise_perf_csv,
+    )
+
+    perf_metrics = estimate_performance(test_tflite_model, compiler_options)
+
+    output = perf_metrics.to_standardized_output(test_tflite_model)
+
+    assert fake_vela_compiler.model_path == test_tflite_model
+    assert fake_vela_compiler.force_regeneration is False
+    mock_parse_layerwise_perf_csv.assert_called_once_with(
+        vela_csv_file=per_layer_csv,
+        metrics=layer_metrics,
+    )
+    metrics = {metric["name"]: metric for metric in output["results"][0]["metrics"]}
+    assert metrics["total_original_weights"] == {
+        "name": "total_original_weights",
+        "value": 64.0,
+        "unit": schema.UNIT_BYTES,
+    }
+    assert metrics["total_npu_encoded_weights"] == {
+        "name": "total_npu_encoded_weights",
+        "value": 32.0,
+        "unit": schema.UNIT_BYTES,
+    }
+    assert metrics[schema.METRIC_NAME_MODEL_WEIGHT_MEMORY] == {
+        "name": schema.METRIC_NAME_MODEL_WEIGHT_MEMORY,
+        "value": 32,
+        "unit": schema.UNIT_BYTES,
+    }
+    assert metrics["dram_feature_map_read_bytes"] == {
+        "name": "dram_feature_map_read_bytes",
+        "value": 16.0,
+        "unit": schema.UNIT_BYTES,
+    }
+    assert metrics["dram_weight_write_bytes"] == {
+        "name": "dram_weight_write_bytes",
+        "value": 8.0,
+        "unit": schema.UNIT_BYTES,
+    }
+    assert metrics["nn_macs"] == {
+        "name": "nn_macs",
+        "value": 128.0,
+        "unit": "operations",
+    }
+    assert metrics["nn_tops"] == {
+        "name": "nn_tops",
+        "value": 0.25,
+        "unit": "TOPS",
+    }
+    for configuration_metric in (
+        "core_clock",
+        "arena_cache_size",
+        "dram_bandwidth",
+        "passes_before_fusing",
+        "passes_after_fusing",
+    ):
+        assert configuration_metric not in metrics
 
 
 def test_to_standardized_output_validates_against_schema(
@@ -613,6 +907,31 @@ def test_to_standardized_output_marks_memory_metrics_unavailable_without_layers(
         assert metric["availability"] == "unavailable"
         assert "value" not in metric
         assert metric["reason"]
+
+
+def test_to_standardized_output_marks_model_weight_memory_unavailable_without_source(
+    test_tflite_model: Path,
+) -> None:
+    """Test model weight metric availability when encoded weights are absent."""
+    perf_metrics = _get_perf_metrics()
+    perf_metrics.additional_summary_metrics = [
+        metric
+        for metric in perf_metrics.additional_summary_metrics
+        if metric.name != "total_npu_encoded_weights"
+    ]
+
+    standardized_output = perf_metrics.to_standardized_output(test_tflite_model)
+
+    result_metrics: dict[str, dict[str, Any]] = {
+        metric["name"]: metric
+        for metric in standardized_output["results"][0]["metrics"]
+    }
+    assert result_metrics[schema.METRIC_NAME_MODEL_WEIGHT_MEMORY] == {
+        "name": schema.METRIC_NAME_MODEL_WEIGHT_MEMORY,
+        "unit": schema.UNIT_BYTES,
+        "availability": "unavailable",
+        "reason": "Model weight memory data is not available.",
+    }
 
 
 def test_to_standardized_output_rejects_negative_total_layer_op_cycles(

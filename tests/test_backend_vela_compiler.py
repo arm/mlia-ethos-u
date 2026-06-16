@@ -369,34 +369,63 @@ experiment,network,accelerator_configuration,system_config,memory_mode,core_cloc
 default,test_model_fp32,Ethos_U55_256,Ethos_U55_High_End_Embedded,Shared_Sram,0.0,0.9,4.0,4.0,4.0,0.5,Off-chip Flash,SRAM,0.0,1,12.1e-05,7,2.0,1.5,0.0,0.0,1.4,7,8,6.0,5.0,7552.0,5.0,1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,4.0,0.0,1.0,2,0.1,23297.0,1.5,0.0,0.0,1.0
 """.strip()  # noqa: E501
 
-TMP_DATA_EXPECTED_STRING = "\
-cycles_total: 2.0, \
-cycles_npu: 23297.0, \
-cycles_sram_access: 1.5, \
-cycles_dram_access: 0.0, \
-cycles_on_chip_flash_access: 0.0, \
-cycles_off_chip_flash_access: 1.0, \
-core_clock: 0.0, \
-dram_memory_used: 0.0, \
-sram_memory_used: 1.5, \
-on_chip_flash_memory_used: 0.0, \
-off_chip_flash_memory_used: 1.4, \
-batch_size: 1, \
-memory_mode: Shared_Sram, \
-system_config: Ethos_U55_High_End_Embedded, \
-accelerator_configuration: Ethos_U55_256, \
-arena_cache_size: 0.9, \
-"
-
 
 def test_backend_compiler_parse_summary_csv_file(test_csv_file: Path) -> None:
     """Test that parsing a csv file produces a LayerwisePerfInfo object."""
     with open(test_csv_file, "w", encoding="utf8") as csv_file:
         csv_file.write(SUMMARY_TMP_DATA)
     summary_object = parse_summary_csv_file(test_csv_file)
-    strings_to_check = repr(summary_object)
-    assert isinstance(summary_object, VelaSummary)
-    assert TMP_DATA_EXPECTED_STRING == strings_to_check
+
+    assert summary_object == VelaSummary(
+        cycles_total=2.0,
+        cycles_npu=23297.0,
+        cycles_sram_access=1.5,
+        cycles_dram_access=0.0,
+        cycles_on_chip_flash_access=0.0,
+        cycles_off_chip_flash_access=1.0,
+        core_clock=0.0,
+        dram_memory_used=0.0,
+        sram_memory_used=1.5,
+        on_chip_flash_memory_used=0.0,
+        off_chip_flash_memory_used=1.4,
+        batch_size=1,
+        memory_mode="Shared_Sram",
+        system_config="Ethos_U55_High_End_Embedded",
+        accelerator_configuration="Ethos_U55_256",
+        arena_cache_size=0.9,
+        sram_bandwidth=4.0,
+        dram_bandwidth=4.0,
+        on_chip_flash_bandwidth=4.0,
+        off_chip_flash_bandwidth=0.5,
+        inferences_per_second=0.0,
+        inference_time=12.1e-05,
+        passes_before_fusing=7.0,
+        passes_after_fusing=2.0,
+        total_original_weights=7.0,
+        total_npu_encoded_weights=8.0,
+        sram_feature_map_read_bytes=6.0,
+        sram_feature_map_write_bytes=5.0,
+        sram_weight_read_bytes=7552.0,
+        sram_weight_write_bytes=5.0,
+        sram_total_bytes=1.0,
+        dram_feature_map_read_bytes=0.0,
+        dram_feature_map_write_bytes=0.0,
+        dram_weight_read_bytes=0.0,
+        dram_weight_write_bytes=0.0,
+        dram_total_bytes=0.0,
+        on_chip_flash_feature_map_read_bytes=0.0,
+        on_chip_flash_feature_map_write_bytes=0.0,
+        on_chip_flash_weight_read_bytes=0.0,
+        on_chip_flash_weight_write_bytes=0.0,
+        on_chip_flash_total_bytes=0.0,
+        off_chip_flash_feature_map_read_bytes=0.0,
+        off_chip_flash_feature_map_write_bytes=0.0,
+        off_chip_flash_weight_read_bytes=4.0,
+        off_chip_flash_weight_write_bytes=0.0,
+        off_chip_flash_total_bytes=1.0,
+        nn_macs=2.0,
+        nn_tops=0.1,
+    )
 
 
 def test_backend_compiler_summary_csv_parsed_empty(empty_test_csv_file: Path) -> None:

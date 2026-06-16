@@ -46,7 +46,6 @@ _SUPPORTED_EXECUTORCH_APPLICATIONS = {
     ("corstone-320", "ethos-u85"),
 }
 
-
 # Supported Corstone per-layer CSV formats use different memory column names.
 # Treat them as aliases for the memory value used by standard memory metrics.
 _CORSTONE_STAGING_USAGE_COLUMN = "Staging Usage"
@@ -281,32 +280,32 @@ def _build_model_metrics(
     metrics = [
         schema.Metric(
             name="npu_active_cycles",
-            value=float(model_stats.npu_active_cycles),
+            value=model_stats.npu_active_cycles,
             unit="cycles",
         ),
         schema.Metric(
             name="npu_idle_cycles",
-            value=float(model_stats.npu_idle_cycles),
+            value=model_stats.npu_idle_cycles,
             unit="cycles",
         ),
         schema.Metric(
             name="npu_total_cycles",
-            value=float(model_stats.npu_total_cycles),
+            value=model_stats.npu_total_cycles,
             unit="cycles",
         ),
         schema.Metric(
             name="npu_axi0_rd_data_beat_received",
-            value=float(model_stats.npu_axi0_rd_data_beat_received),
+            value=model_stats.npu_axi0_rd_data_beat_received,
             unit="beats",
         ),
         schema.Metric(
             name="npu_axi0_wr_data_beat_written",
-            value=float(model_stats.npu_axi0_wr_data_beat_written),
+            value=model_stats.npu_axi0_wr_data_beat_written,
             unit="beats",
         ),
         schema.Metric(
             name="npu_axi1_rd_data_beat_received",
-            value=float(model_stats.npu_axi1_rd_data_beat_received),
+            value=model_stats.npu_axi1_rd_data_beat_received,
             unit="beats",
         ),
     ]
@@ -315,7 +314,7 @@ def _build_model_metrics(
         metrics.append(
             schema.Metric(
                 name="npu_axi1_wr_data_beat_written",
-                value=float(model_stats.npu_axi1_wr_data_beat_written),
+                value=model_stats.npu_axi1_wr_data_beat_written,
                 unit="beats",
             )
         )
