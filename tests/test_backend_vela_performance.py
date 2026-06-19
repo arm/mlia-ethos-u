@@ -515,6 +515,11 @@ def _get_perf_metrics() -> PerformanceMetrics:
                 value=8.0,
                 unit=schema.UNIT_BYTES,
             ),
+            schema.Metric(
+                name=schema.METRIC_NAME_INFERENCE_TIME,
+                value=0.207,
+                unit=schema.UNIT_MILLISECONDS,
+            ),
             schema.Metric(name="dram_total_bytes", value=12.0, unit=schema.UNIT_BYTES),
         ],
     )
@@ -578,6 +583,16 @@ def test_to_standardized_output(
         "name": schema.METRIC_NAME_INFERENCES_PER_SECOND,
         "value": 4830.9,
         "unit": schema.UNIT_INFERENCES_PER_SECOND,
+    }
+    assert result_metrics[schema.METRIC_NAME_INFERENCE_TIME] == {
+        "name": schema.METRIC_NAME_INFERENCE_TIME,
+        "value": 0.207,
+        "unit": schema.UNIT_MILLISECONDS,
+    }
+    assert result_metrics["batch_inference_time"] == {
+        "name": "batch_inference_time",
+        "value": 0.207,
+        "unit": schema.UNIT_MILLISECONDS,
     }
     assert result_metrics[schema.METRIC_NAME_TARGET_UTILIZATION] == {
         "name": schema.METRIC_NAME_TARGET_UTILIZATION,
@@ -766,6 +781,7 @@ def test_performance_metrics_preserves_vela_summary_statistics(
         accelerator_configuration="Ethos_U55_256",
         arena_cache_size=4096.0,
         dram_bandwidth=4.0,
+        inference_time=0.0002,
         passes_before_fusing=7.0,
         passes_after_fusing=2.0,
         total_original_weights=64.0,
@@ -824,6 +840,11 @@ def test_performance_metrics_preserves_vela_summary_statistics(
         "name": schema.METRIC_NAME_MODEL_WEIGHT_MEMORY,
         "value": 32,
         "unit": schema.UNIT_BYTES,
+    }
+    assert metrics[schema.METRIC_NAME_INFERENCE_TIME] == {
+        "name": schema.METRIC_NAME_INFERENCE_TIME,
+        "value": pytest.approx(0.2),
+        "unit": schema.UNIT_MILLISECONDS,
     }
     assert metrics["dram_feature_map_read_bytes"] == {
         "name": "dram_feature_map_read_bytes",

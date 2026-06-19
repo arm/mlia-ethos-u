@@ -100,7 +100,7 @@ Direct `.pt2` support depends on `mlia-converters-pytorch`, and the current
 Corstone ExecuTorch path is only available for selected target and backend
 combinations.
 
-The package depends on `mlia==0.11.0.dev33` and is intended to be used as part
+The package depends on `mlia>=0.11.0.dev36` and is intended to be used as part
 of a wider MLIA installation rather than as a standalone CLI.
 
 ## Reporting bugs

@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 _VELA_VERSION_CACHE: str | None = None
 
 _VELA_SUMMARY_METRIC_UNITS = {
-    "inference_time": "seconds",
+    "inference_time": "ms",
     "sram_memory_used": "bytes",
     "dram_memory_used": "bytes",
     "on_chip_flash_memory_used": "bytes",
@@ -75,6 +75,13 @@ _VELA_OPTIONAL_LAYER_METRIC_UNITS = {
 }
 
 _VELA_MODEL_WEIGHT_MEMORY_SOURCE_METRIC_NAME = "total_npu_encoded_weights"
+
+
+def _summary_metric_value(field_name: str, value: float | int) -> float | int:
+    """Return the MLIA output value for a Vela summary metric."""
+    if field_name == schema.METRIC_NAME_INFERENCE_TIME:
+        return value * 1000
+    return value
 
 
 def _byte_count_value(value: int | float) -> int | float:
@@ -264,7 +271,7 @@ class PerformanceMetrics:
             schema.Metric(
                 name="batch_inference_time",
                 value=self.batch_inference_time,
-                unit="seconds",
+                unit=schema.UNIT_MILLISECONDS,
             ),
             schema.Metric(name="batch_size", value=self.batch_size, unit="count"),
             schema.Metric(
@@ -688,5 +695,11 @@ def _summary_metrics(summary_data: VelaSummary) -> list[schema.Metric]:
         value = getattr(summary_data, field_name, None)
         if value is None:
             continue
-        metrics.append(schema.Metric(name=source_name, value=value, unit=unit))
+        metrics.append(
+            schema.Metric(
+                name=source_name,
+                value=_summary_metric_value(field_name, value),
+                unit=unit,
+            )
+        )
     return metrics
