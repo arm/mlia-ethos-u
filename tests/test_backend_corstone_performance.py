@@ -406,6 +406,38 @@ def test_get_metrics_wrong_fvp(tmp_path: Path) -> None:
         )
 
 
+def test_get_metrics_pte_parse_failure_is_wrapped(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test .pte parser failures include ExecuTorch compatibility guidance."""
+    monkeypatch.setattr(
+        "mlia.backend.corstone.performance.build_corstone_command",
+        MagicMock(return_value=Command(["fvp"])),
+    )
+    monkeypatch.setattr(
+        "mlia.backend.corstone.performance.process_command_output",
+        MagicMock(),
+    )
+
+    with pytest.raises(
+        BackendExecutionFailed,
+        match="Ensure .pte file is compatible with ExecuTorch Corstone FVP",
+    ):
+        get_metrics(
+            CorstoneRunConfig(
+                tmp_path,
+                Path("backend_path"),
+                "corstone-300",
+                "ethos-u55",
+                256,
+                Path("model.pte"),
+                True,
+                "default",
+            )
+        )
+
+
 @pytest.mark.parametrize(
     "target, per_layer_csv, model_metrics, expected_model_stats, expected_per_layer",
     [

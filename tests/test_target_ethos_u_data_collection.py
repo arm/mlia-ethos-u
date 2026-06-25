@@ -563,6 +563,25 @@ def test_performance_collector_tosa_model(
     assert isinstance(result, PerformanceMetrics)
 
 
+def test_performance_collector_tosa_model_rejects_corstone_backend(
+    sample_context: Context, tmp_path: Path
+) -> None:
+    """Test TOSA performance rejects Corstone backends."""
+    target = EthosUConfiguration.load_profile("ethos-u55-256")
+
+    tosa_model = tmp_path / "model.tosa"
+    tosa_model.write_text("mock tosa model")
+
+    collector = EthosUPerformance(tosa_model, target, backends=["corstone-300"])
+    collector.set_context(sample_context)
+
+    with pytest.raises(
+        ConfigurationError,
+        match="TOSA performance estimation is only supported with the Vela backend",
+    ):
+        collector.collect_data()
+
+
 def test_performance_collector_invalid_model_format(
     sample_context: Context, tmp_path: Path
 ) -> None:

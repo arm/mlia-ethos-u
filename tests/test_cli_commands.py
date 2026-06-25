@@ -134,6 +134,7 @@ def test_check_category_combinations(
         context=execution_context,
         backends=None,
         accept_eula=None,
+        backend_options=None,
     )
 
 

@@ -733,7 +733,15 @@ def get_metrics(cfg: CorstoneRunConfig) -> CorstonePerformanceMetrics:
     except subprocess.CalledProcessError as err:
         raise BackendExecutionFailed("Backend execution failed.") from err
 
-    return output_parser.get_metrics(cfg.output_dir, cfg.fvp)
+    try:
+        return output_parser.get_metrics(cfg.output_dir, cfg.fvp)
+    except ValueError as err:
+        if cfg.is_pte:
+            raise BackendExecutionFailed(
+                "Backend execution failed. Ensure .pte file is compatible "
+                "with ExecuTorch Corstone FVP."
+            ) from err
+        raise
 
 
 def estimate_performance(

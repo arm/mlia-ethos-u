@@ -172,6 +172,15 @@ class EthosUPerformance(ContextAwareDataCollector):
                 "Input must be a TFLite, TOSA, ExecuTorch .pte or PyTorch .pt2 file."
             )
 
+        any_corstone_backend = any(
+            is_corstone_backend(backend) for backend in self.backends or []
+        )
+        if is_tosa_file(self.model) and any_corstone_backend:
+            raise ConfigurationError(
+                "TOSA performance estimation is only supported with the Vela backend. "
+                "Use '-b vela' or provide a TFLite/.pte/.pt2 model for Corstone."
+            )
+
         model_to_estimate: Path | Any
         if is_pte_file(self.model):
             if self.backends is None:
