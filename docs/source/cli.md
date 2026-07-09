@@ -11,7 +11,7 @@ Use the core `mlia` CLI for Ethos-U runs. This guide focuses on the command patt
 
 A sensible first sequence is:
 
-1. List what is installed with `mlia-target list` and `mlia-backend list`.
+1. List what is installed with `mlia target list` and `mlia backend list`.
 2. Run one compatibility command.
 3. Run one performance command with `vela`.
 4. Only then add `corstone` or `--json`.

@@ -23,7 +23,7 @@ right next check.
 If MLIA cannot find the target profile, start with discovery rather than with
 performance debugging.
 
-- Run `mlia-target list` to confirm the profile name.
+- Run `mlia target list` to confirm the profile name.
 - Use an explicit TOML path if you are testing a custom profile.
 - Check that `mlia-ethos-u` is installed in the active environment.
 
@@ -34,8 +34,8 @@ Corstone yet.
 
 If the backend is unavailable, confirm installation first.
 
-- Run `mlia-backend list`.
-- Install or reinstall the backend through the MLIA backend-management workflow
+- Run `mlia backend list`.
+- Install or reinstall the backend through the MLIA backend management workflow
   in your environment.
 
 ## Model does not map cleanly

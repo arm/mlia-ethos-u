@@ -64,8 +64,8 @@ When you change one of these areas, review the others too:
 
 Before you consider a change complete, ask:
 
-- Does the target still appear correctly through `mlia-target list`?
-- Do the expected backends still appear through `mlia-backend list`?
+- Does the target still appear correctly through `mlia target list`?
+- Do the expected backends still appear through `mlia backend list`?
 - Did the change alter compatibility output, performance output, or advice text?
 - Does the docs wording still match the actual workflow?
 

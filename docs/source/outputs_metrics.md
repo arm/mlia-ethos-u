@@ -45,7 +45,9 @@ A simplified result shape might look like this:
     {
       "metrics": {
         "total_cycles": 123456,
-        "npu_cycles": 120000
+        "npu_cycles": 120000,
+        "inference_time": 0.207,
+        "model_weight_memory": 4096
       }
     }
   ]
@@ -65,9 +67,15 @@ Common Vela metrics include:
 
 - `total_cycles`
 - `npu_cycles`
+- `inference_time`
+- `inferences_per_second`
+- `target_utilization`
 - `sram_access_cycles`
 - `dram_access_cycles`
+- `model_weight_memory`
 - Memory area size metrics.
+- Additional Vela summary statistics such as encoded weights or total bytes
+  when Vela reports them.
 - Per-operator cycle and utilisation data.
 
 ### What Vela numbers help you decide
@@ -94,6 +102,8 @@ Common Corstone signals include:
 - `npu_idle_cycles`
 - `npu_total_cycles`
 - AXI data-beat counters.
+- Standardized memory and weight metrics when they can be derived from the
+  backend result.
 - Per-layer CSV metrics covering cycles, memory access, and utilisation.
 
 ### What Corstone numbers help you decide
