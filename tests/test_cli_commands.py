@@ -8,8 +8,20 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+import typer
 
+import mlia.api
 import mlia.cli.commands as cli_commands
+import mlia.cli.command_validators as cli_validators
+
+from mlia.cli.commands import mlia_app, AppContext
+
+
+def _get_app_context() -> typer.Context:
+    return typer.Context(
+        typer.main.get_command(mlia_app),
+        obj=AppContext.build(),
+    )
 
 
 def test_backend_command_action_list(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -19,9 +31,10 @@ def test_backend_command_action_list(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cli_commands, "format_backend_info", format_backend_info)
     monkeypatch.setattr(cli_commands, "setup_logging", MagicMock())
 
-    cli_commands.backend_list()
+    ctx = _get_app_context()
+    cli_commands.backend_list(ctx)
 
-    format_backend_info.assert_called_once_with()
+    format_backend_info.assert_called_once_with(ctx.obj)
 
 
 def test_target_command_action_list(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -31,16 +44,17 @@ def test_target_command_action_list(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cli_commands, "format_target_info", format_target_info)
     monkeypatch.setattr(cli_commands, "setup_logging", MagicMock())
 
-    cli_commands.target_list()
+    ctx = _get_app_context()
+    cli_commands.target_list(ctx)
 
-    format_target_info.assert_called_once_with()
+    format_target_info.assert_called_once_with(ctx.obj)
 
 
 def test_backend_command_action_uninstall(monkeypatch: pytest.MonkeyPatch) -> None:
     """Test `mlia backend uninstall` command helper."""
     uninstall_backends = MagicMock()
 
-    monkeypatch.setattr(cli_commands, "uninstall_backends", uninstall_backends)
+    monkeypatch.setattr(mlia.api, "uninstall_backends", uninstall_backends)
     monkeypatch.setattr(cli_commands, "setup_logging", MagicMock())
 
     cli_commands.backend_uninstall(["backend_name"])
@@ -68,7 +82,7 @@ def test_backend_command_action_install(
     """Test `mlia backend install` command helper."""
     install_backends = MagicMock()
 
-    monkeypatch.setattr(cli_commands, "install_backends", install_backends)
+    monkeypatch.setattr(mlia.api, "install_backends", install_backends)
     monkeypatch.setattr(cli_commands, "setup_logging", MagicMock())
 
     cli_commands.backend_install(
@@ -114,11 +128,11 @@ def test_check_category_combinations(
         MagicMock(return_value=execution_context),
     )
     monkeypatch.setattr(
-        cli_commands,
+        cli_validators,
         "validate_check_target_profile",
         MagicMock(return_value=True),
     )
-    monkeypatch.setattr(cli_commands, "get_advice", get_advice)
+    monkeypatch.setattr(mlia.api, "get_advice", get_advice)
 
     cli_commands.check(
         model=str(test_tflite_model),
@@ -163,11 +177,11 @@ def test_check_passes_eula_selection_to_get_advice(
         MagicMock(return_value=execution_context),
     )
     monkeypatch.setattr(
-        cli_commands,
+        cli_validators,
         "validate_check_target_profile",
         MagicMock(return_value=True),
     )
-    monkeypatch.setattr(cli_commands, "get_advice", get_advice)
+    monkeypatch.setattr(mlia.api, "get_advice", get_advice)
 
     cli_commands.check(
         model=str(test_tflite_model),

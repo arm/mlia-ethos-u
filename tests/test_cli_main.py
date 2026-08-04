@@ -69,7 +69,8 @@ def test_main_calls_mlia_app(monkeypatch: pytest.MonkeyPatch) -> None:
     mlia_app = MagicMock()
 
     monkeypatch.setattr(cli_main, "mlia_app", mlia_app)
-    monkeypatch.setattr(cli_main, "_configure_cli_colors", MagicMock(return_value=True))
+    # monkeypatch.setattr(cli_commands, "color_enabled", lambda: True)
+    monkeypatch.setattr(cli_main, "color_enabled", MagicMock(return_value=True))
 
     cli_main.main()
     mlia_app.assert_called_once_with(color=True)
@@ -82,10 +83,10 @@ def test_configure_cli_colors_enables_color_for_tty_without_no_color(
     monkeypatch.delenv("NO_COLOR", raising=False)
     stream = MagicMock()
     stream.isatty.return_value = True
-    monkeypatch.setattr(cli_main.sys, "stdout", stream)
+    monkeypatch.setattr(cli_commands.sys, "stdout", stream)
 
-    assert cli_main._configure_cli_colors() is True
-    assert cli_commands.console.no_color is False
+    assert cli_commands.color_enabled() is True
+    assert cli_commands.AppContext.build().use_color is True
 
 
 def test_configure_cli_colors_disables_color_when_stdout_is_not_tty(
@@ -95,10 +96,10 @@ def test_configure_cli_colors_disables_color_when_stdout_is_not_tty(
     monkeypatch.delenv("NO_COLOR", raising=False)
     stream = MagicMock()
     stream.isatty.return_value = False
-    monkeypatch.setattr(cli_main.sys, "stdout", stream)
+    monkeypatch.setattr(cli_commands.sys, "stdout", stream)
 
-    assert cli_main._configure_cli_colors() is False
-    assert cli_commands.console.no_color is True
+    assert cli_commands.color_enabled() is False
+    assert cli_commands.AppContext.build().use_color is False
 
 
 def test_configure_cli_colors_disables_color_when_no_color_is_set(
@@ -108,10 +109,10 @@ def test_configure_cli_colors_disables_color_when_no_color_is_set(
     monkeypatch.setenv("NO_COLOR", "1")
     stream = MagicMock()
     stream.isatty.return_value = True
-    monkeypatch.setattr(cli_main.sys, "stdout", stream)
+    monkeypatch.setattr(cli_commands.sys, "stdout", stream)
 
-    assert not cli_main._configure_cli_colors()
-    assert cli_commands.console.no_color
+    assert cli_main.color_enabled() is False
+    assert cli_commands.AppContext.build().use_color is False
 
 
 def test_check_without_arguments_shows_help_and_exit_code_2() -> None:
@@ -157,7 +158,7 @@ def test_main_dispatches_backend_list(monkeypatch: pytest.MonkeyPatch) -> None:
     result = CliRunner().invoke(cli_main.mlia_app, ["backend", "list"])
 
     assert result.exit_code == 0
-    format_backend_info.assert_called_once_with()
+    format_backend_info.assert_called_once()
 
 
 def test_main_dispatches_target_list(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -170,7 +171,7 @@ def test_main_dispatches_target_list(monkeypatch: pytest.MonkeyPatch) -> None:
     result = CliRunner().invoke(cli_main.mlia_app, ["target", "list"])
 
     assert result.exit_code == 0
-    format_target_info.assert_called_once_with()
+    format_target_info.assert_called_once()
 
 
 def test_backend_main_warns_about_deprecated_entry_point(
@@ -181,9 +182,7 @@ def test_backend_main_warns_about_deprecated_entry_point(
     secho = MagicMock()
 
     monkeypatch.setattr(cli_main, "backend_app", backend_app)
-    monkeypatch.setattr(
-        cli_main, "_configure_cli_colors", MagicMock(return_value=False)
-    )
+    monkeypatch.setattr(cli_commands, "color_enabled", MagicMock(return_value=False))
     monkeypatch.setattr(cli_main.typer, "secho", secho)
 
     cli_main.backend_main()
@@ -206,9 +205,7 @@ def test_target_main_warns_about_deprecated_entry_point(
     secho = MagicMock()
 
     monkeypatch.setattr(cli_main, "target_app", target_app)
-    monkeypatch.setattr(
-        cli_main, "_configure_cli_colors", MagicMock(return_value=False)
-    )
+    monkeypatch.setattr(cli_commands, "color_enabled", MagicMock(return_value=False))
     monkeypatch.setattr(cli_main.typer, "secho", secho)
 
     cli_main.target_main()
