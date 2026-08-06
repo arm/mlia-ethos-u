@@ -239,7 +239,7 @@ def test_report_perf_metrics(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Test report_perf_metrics formatter."""
-    monkeypatch.setenv("COLUMNS", "5000")
+    monkeypatch.setattr("mlia.utils.console._output_width", lambda: 5000)
     report = report_perf_metrics(perf_metrics)
     assert isinstance(report, CompoundReport)
     plain_text = remove_ascii_codes(report.to_plain_text())

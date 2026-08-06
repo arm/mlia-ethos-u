@@ -81,6 +81,8 @@ def test_configure_cli_colors_enables_color_for_tty_without_no_color(
 ) -> None:
     """Colors should be enabled for TTY output when NO_COLOR is unset."""
     monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.delenv("MLIA_NO_COLOR", raising=False)
+    monkeypatch.setenv("TERM", "xterm")
     stream = MagicMock()
     stream.isatty.return_value = True
     monkeypatch.setattr(cli_commands.sys, "stdout", stream)
