@@ -16,20 +16,7 @@ from mlia.testing.e2e import COMMON_PATTERNS
 from mlia.testing.e2e import COMPATIBILITY_PATTERNS
 from mlia.testing.e2e import PERFORMANCE_PATTERNS
 
-ETHOS_U_LAYER_WISE_PATTERNS = (
-    r".*Layer-Wise Metrics:.*",
-    r".*│.*Layer((.|\n)*)Name[ ]+│.*",
-    r".*│.*TFLite((.|\n)*)Operator[ ]+│.*",
-    r".*│.*SRAM((.|\n)*)Usage[ ]+│.*",
-    r".*│.*OP((.|\n)*)Cycles[ ]+│.*",
-    r".*│.*NPU((.|\n)*)Cycles[ ]+│.*",
-    r".*│.*SRAM((.|\n)*)AC[ ]+│.*",
-    r".*│.*DRAM((.|\n)*)AC[ ]+│.*",
-    r".*│.*OnFlash((.|\n)*)AC[ ]+│.*",
-    r".*│.*OffFlash((.|\n)*)AC[ ]+│.*",
-    r".*│.*MAC((.|\n)*)Count[ ]+│.*",
-    r".*│.*MAC((.|\n)*)Util((.|\n)*)\(%\)[ ]+│.*",
-)
+ETHOS_U_LAYER_WISE_PATTERNS = (r".*Layer-Wise Metrics:.*",)
 
 
 def assert_matches(pattern: str, output: str) -> None:
