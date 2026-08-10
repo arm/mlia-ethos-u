@@ -40,11 +40,14 @@ requires = [
 ]
 build-backend = "hatchling.build"
 
-[tool.hatch.version]
-source = "uv-dynamic-versioning"
+[tool.hatch.build.targets.sdist]
+exclude = ["/.venv-*"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mlia"]
+
+[tool.hatch.version]
+source = "uv-dynamic-versioning"
 
 [tool.uv-dynamic-versioning]
 vcs = "git"
