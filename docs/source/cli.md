@@ -94,7 +94,7 @@ mlia check model.pte \
 
 This path is currently limited to supported target and backend combinations, so
 it should be treated as a Corstone-specific workflow rather than a replacement
-for the normal Vela-first TFLite path.
+for the normal Vela-first LiteRT / TensorFlow Lite `.tflite` path.
 
 ## JSON output
 

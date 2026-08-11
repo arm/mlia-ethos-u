@@ -77,7 +77,7 @@ like:
 - Does a model that looks reasonable in Vela still look reasonable with richer
   backend evidence?
 - Do I need to run the supported ExecuTorch AOT path instead of the standard
-  TFLite flow?
+  `.tflite` flow?
 
 ### Corstone backend: good first commands
 
@@ -119,7 +119,7 @@ before acting, or when you are trying to explain where the cost is really
 coming from.
 
 It is also the backend path to use when you are intentionally validating a
-supported ExecuTorch AOT flow instead of the standard TFLite-based workflow.
+supported ExecuTorch AOT flow instead of the standard `.tflite`-based workflow.
 
 ## A practical workflow
 

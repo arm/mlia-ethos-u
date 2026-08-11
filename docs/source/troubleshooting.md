@@ -56,7 +56,7 @@ If the model is rejected early or support looks much worse than expected, check
 the input itself first.
 
 - Ensure the input model is a valid `.tflite` file.
-- Prefer quantized TFLite models for Ethos-U analysis.
+- Prefer quantized LiteRT / TensorFlow Lite `.tflite` models for Ethos-U analysis.
 - Re-check export settings if operator coverage looks unexpectedly poor.
 
 For the Corstone ExecuTorch path:

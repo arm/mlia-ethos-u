@@ -35,8 +35,9 @@ It extends the core MLIA framework with Arm Ethos-U target knowledge, operator
 analysis, bundled target profiles, and the backend integrations required for
 Vela compilation and Corstone-based performance flows.
 
-This is the package to install when you want MLIA to analyse TensorFlow Lite
-models for Ethos-U55, Ethos-U65, or Ethos-U85 targets, or when you want to run
+This is the package to install when you want MLIA to analyse LiteRT /
+TensorFlow Lite `.tflite` models for Ethos-U55, Ethos-U65, or Ethos-U85 targets,
+or when you want to run
 the Corstone-based ExecuTorch AOT path for supported PyTorch inputs.
 
 ## Supported targets

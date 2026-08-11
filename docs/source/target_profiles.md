@@ -12,7 +12,8 @@ part of the MLIA ecosystem responsible for Ethos-U-specific target profiles,
 operator analysis, reporting, and the backend wiring needed for performance and
 compatibility flows.
 
-The plugin is intended for TensorFlow Lite models that will be analysed against
+The plugin is intended for LiteRT / TensorFlow Lite `.tflite` models that will
+be analysed against
 Ethos-U55, Ethos-U65, or Ethos-U85 configurations. It also participates in
 supported Corstone ExecuTorch flows for `.pt2` and `.pte` inputs.
 
@@ -41,7 +42,7 @@ hardware targets.
 
 The most common input format in this package is:
 
-- TensorFlow Lite (`.tflite`).
+- LiteRT / TensorFlow Lite (`.tflite`).
 
 Additional formats can also participate in Ethos-U workflows:
 
@@ -50,7 +51,7 @@ Additional formats can also participate in Ethos-U workflows:
 - PyTorch exported program (`.pt2`) when `mlia-converters-pytorch` is
   installed.
 
-Quantized TFLite models are still the natural fit for Vela and for most
+Quantized LiteRT / TensorFlow Lite `.tflite` models are still the natural fit for Vela and for most
 day-to-day Ethos-U analysis. The `.pt2` and `.pte` paths are specifically tied
 to supported Corstone ExecuTorch AOT flows.
 
