@@ -173,6 +173,7 @@ def get_corstone_installation(corstone_name: str) -> Installation | None:
     expected_files_fvp = corstone_fvp.fvp_expected_files
     expected_files_vht = corstone_fvp.get_vht_expected_files()
     backend_subfolder = expected_files_fvp[0].split("FVP")[0]
+    supporting_subfolders = ["python"] if corstone_name == "corstone-320" else None
 
     kwargs = {
         "name": corstone_name,
@@ -187,6 +188,7 @@ def get_corstone_installation(corstone_name: str) -> Installation | None:
             PackagePathChecker(
                 expected_files=expected_files_fvp,
                 backend_subfolder=backend_subfolder,
+                supporting_subfolders=supporting_subfolders,
                 settings={"profile": "default"},
             ),
             StaticPathChecker(

@@ -8,6 +8,7 @@ import base64
 import csv
 import json
 import logging
+import os
 import re
 import subprocess
 from dataclasses import dataclass, field, fields
@@ -666,11 +667,30 @@ class CorstoneRunConfig:
     profile: str = "default"
 
 
+def _corstone_320_runtime_env(backend_path: Path) -> dict[str, str]:
+    """Return environment for the bundled Corstone-320 Python runtime."""
+    python_home = backend_path / "python"
+    python_lib = python_home / "lib"
+    env = os.environ.copy()
+    env["PYTHONHOME"] = python_home.as_posix()
+
+    existing_library_path = os.environ.get("LD_LIBRARY_PATH")
+    library_path_entries = [python_lib.as_posix()]
+    if existing_library_path:
+        library_path_entries.append(existing_library_path)
+    env["LD_LIBRARY_PATH"] = os.pathsep.join(library_path_entries)
+
+    return env
+
+
 def build_corstone_command(cfg: CorstoneRunConfig) -> Command:
     """Build command to run Corstone FVP."""
     fvp_metadata = get_fvp_metadata(cfg.fvp, cfg.profile, cfg.target, cfg.is_pte)
+    env = None
 
     if cfg.fvp == "corstone-320":
+        if cfg.profile == "default":
+            env = _corstone_320_runtime_env(cfg.backend_path)
         cmd = [
             cfg.backend_path.joinpath(fvp_metadata.executable).as_posix(),
             "-a",
@@ -710,7 +730,7 @@ def build_corstone_command(cfg: CorstoneRunConfig) -> Command:
             "mps3_board.visualisation.disable-visualisation=1",
             "--stat",
         ]
-    return Command(cmd)
+    return Command(cmd, env=env)
 
 
 def get_metrics(cfg: CorstoneRunConfig) -> CorstonePerformanceMetrics:

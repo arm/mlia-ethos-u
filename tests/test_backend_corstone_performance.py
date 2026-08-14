@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import base64
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -108,6 +109,17 @@ def negative_counter_output() -> list[str]:
     return [
         f"<metrics>{encode_b64(json_data)}</metrics>",
     ]
+
+
+@pytest.fixture
+def mock_mlia_resources(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Mock MLIA resource lookup for command construction tests."""
+    monkeypatch.setattr(
+        "mlia.backend.corstone.performance.get_mlia_resource_dirs", lambda: []
+    )
+    monkeypatch.setattr(
+        "mlia.backend.corstone.performance.get_mlia_resources", lambda: Path("apps")
+    )
 
 
 def test_generic_inference_output_parser_success(
@@ -265,39 +277,6 @@ class BuildCmdCase:
         ),
         BuildCmdCase(
             backend_path=Path("backend_path"),
-            fvp="corstone-320",
-            target="ethos-u85",
-            mac=1024,
-            model=Path("model.tflite"),
-            is_pte=False,
-            profile="default",
-            expected_command=Command(
-                [
-                    "backend_path/FVP_Corstone_SSE-320",
-                    "-a",
-                    "apps/backends/applications/"
-                    "inference_runner-sse-320-26.03.0-tflm-ethos-U85-Default-noTA/"
-                    "mlek_inference_runner.axf",
-                    "--data",
-                    "model.tflite@0x90000000",
-                    "-C",
-                    "mps4_board.subsystem.ethosu.num_macs=1024",
-                    "-C",
-                    "mps4_board.telnetterminal0.start_telnet=0",
-                    "-C",
-                    "mps4_board.uart0.out_file='-'",
-                    "-C",
-                    "mps4_board.uart0.shutdown_on_eot=1",
-                    "-C",
-                    "mps4_board.visualisation.disable-visualisation=1",
-                    "-C",
-                    "vis_hdlcd.disable_visualisation=1",
-                    "--stat",
-                ],
-            ),
-        ),
-        BuildCmdCase(
-            backend_path=Path("backend_path"),
             fvp="corstone-300",
             target="ethos-u55",
             mac=256,
@@ -329,19 +308,12 @@ class BuildCmdCase:
         ),
     ],
 )
-def test_build_corsone_command(
+@pytest.mark.usefixtures("mock_mlia_resources")
+def test_build_corstone_command(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
     case: BuildCmdCase,
 ) -> None:
-    """Test function build_corstone_command."""
-    monkeypatch.setattr(
-        "mlia.backend.corstone.performance.get_mlia_resource_dirs", lambda: []
-    )
-    monkeypatch.setattr(
-        "mlia.backend.corstone.performance.get_mlia_resources", lambda: Path("apps")
-    )
-
+    """Test command construction with static process environment."""
     command = build_corstone_command(
         CorstoneRunConfig(
             tmp_path,
@@ -355,6 +327,132 @@ def test_build_corsone_command(
         )
     )
     assert command == case.expected_command
+
+
+@pytest.mark.usefixtures("mock_mlia_resources")
+def test_build_corstone_320_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test command construction for backend `corstone-320`."""
+    monkeypatch.delenv("LD_LIBRARY_PATH", raising=False)
+
+    backend_path = Path("backend_path")
+    expected_env = os.environ.copy()
+    expected_env["PYTHONHOME"] = (backend_path / "python").as_posix()
+    expected_env["LD_LIBRARY_PATH"] = (backend_path / "python" / "lib").as_posix()
+
+    command = build_corstone_command(
+        CorstoneRunConfig(
+            Path("output_path"),
+            backend_path,
+            "corstone-320",
+            "ethos-u85",
+            1024,
+            Path("model.tflite"),
+            False,
+            "default",
+        )
+    )
+
+    assert command == Command(
+        [
+            "backend_path/FVP_Corstone_SSE-320",
+            "-a",
+            "apps/backends/applications/"
+            "inference_runner-sse-320-26.03.0-tflm-ethos-U85-Default-noTA/"
+            "mlek_inference_runner.axf",
+            "--data",
+            "model.tflite@0x90000000",
+            "-C",
+            "mps4_board.subsystem.ethosu.num_macs=1024",
+            "-C",
+            "mps4_board.telnetterminal0.start_telnet=0",
+            "-C",
+            "mps4_board.uart0.out_file='-'",
+            "-C",
+            "mps4_board.uart0.shutdown_on_eot=1",
+            "-C",
+            "mps4_board.visualisation.disable-visualisation=1",
+            "-C",
+            "vis_hdlcd.disable_visualisation=1",
+            "--stat",
+        ],
+        env=expected_env,
+    )
+
+
+@pytest.mark.usefixtures("mock_mlia_resources")
+def test_corstone_320_command_uses_bundled_python_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test backend `corstone-320` command uses the installed Python runtime."""
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/host/lib")
+
+    command = build_corstone_command(
+        CorstoneRunConfig(
+            tmp_path,
+            tmp_path,
+            "corstone-320",
+            "ethos-u85",
+            1024,
+            Path("model.tflite"),
+            False,
+            "default",
+        )
+    )
+
+    assert command.env is not None
+    assert command.env["PYTHONHOME"] == (tmp_path / "python").as_posix()
+    assert command.env["LD_LIBRARY_PATH"] == (
+        f"{(tmp_path / 'python' / 'lib').as_posix()}:/host/lib"
+    )
+
+
+@pytest.mark.usefixtures("mock_mlia_resources")
+def test_build_corstone_320_avh_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test command construction for backend `corstone-320` with profile `AVH`."""
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/host/lib")
+
+    command = build_corstone_command(
+        CorstoneRunConfig(
+            Path("output_path"),
+            Path("backend_path"),
+            "corstone-320",
+            "ethos-u85",
+            1024,
+            Path("model.tflite"),
+            False,
+            "AVH",
+        )
+    )
+
+    assert command == Command(
+        [
+            "backend_path/VHT_Corstone_SSE-320",
+            "-a",
+            "apps/backends/applications/"
+            "inference_runner-sse-320-26.03.0-tflm-ethos-U85-Default-noTA/"
+            "mlek_inference_runner.axf",
+            "--data",
+            "model.tflite@0x90000000",
+            "-C",
+            "mps4_board.subsystem.ethosu.num_macs=1024",
+            "-C",
+            "mps4_board.telnetterminal0.start_telnet=0",
+            "-C",
+            "mps4_board.uart0.out_file='-'",
+            "-C",
+            "mps4_board.uart0.shutdown_on_eot=1",
+            "-C",
+            "mps4_board.visualisation.disable-visualisation=1",
+            "-C",
+            "vis_hdlcd.disable_visualisation=1",
+            "--stat",
+        ]
+    )
 
 
 def test_get_generic_inference_app_path(

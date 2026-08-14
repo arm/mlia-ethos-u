@@ -16,6 +16,7 @@ from mlia.backend.corstone.install import (
     CorstoneInstaller,
     get_corstone_installation,
 )
+from mlia.backend.install import BackendInstallation, PackagePathChecker
 from mlia.backend.install import Installation
 
 
@@ -102,6 +103,37 @@ def test_get_corstone_installation(corstone_name: str) -> None:
     """Test Corstone installation"""
     installation = get_corstone_installation(corstone_name)
     assert isinstance(installation, Installation)
+
+
+@pytest.mark.skipif(platform.system() == "Darwin", reason="No runner for platform")
+def test_corstone_320_installation_includes_python_supporting_paths() -> None:
+    """Test Corstone-320 package installation includes the Python runtime."""
+    installation = get_corstone_installation("corstone-320")
+
+    assert isinstance(installation, BackendInstallation)
+    package_checker = installation.path_checker.path_checkers[0]
+
+    assert isinstance(package_checker, PackagePathChecker)
+    assert (
+        package_checker.backend_subfolder
+        == (package_checker.expected_files[0].split("FVP")[0])
+    )
+    assert package_checker.supporting_subfolders == ["python"]
+
+
+@pytest.mark.skipif(platform.system() == "Darwin", reason="No runner for platform")
+@pytest.mark.parametrize("corstone_name", ["corstone-300", "corstone-310"])
+def test_corstone_300_and_310_installations_keep_single_subfolder(
+    corstone_name: str,
+) -> None:
+    """Test older Corstone package installation remains single-subfolder."""
+    installation = get_corstone_installation(corstone_name)
+
+    assert isinstance(installation, BackendInstallation)
+    package_checker = installation.path_checker.path_checkers[0]
+
+    assert isinstance(package_checker, PackagePathChecker)
+    assert package_checker.supporting_subfolders == []
 
 
 @pytest.mark.skipif(platform.system() != "Darwin", reason="No runner for platform")
