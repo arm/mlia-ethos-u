@@ -8,7 +8,7 @@ description = "ML Inference Advisor Ethos Plugin"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "mlia>=0.12.0,<0.13"
+    "mlia>=0.12.1"
 ]
 keywords = ["ml", "arm", "ethos", "tflite"]
 authors = [{name = "Arm Ltd", email = "mlia@arm.com"}]
@@ -75,7 +75,7 @@ version_provider = "scm"
 update_changelog_on_bump = true
 
 [tool.commitizen.customize]
-schema_pattern = "(?s)(build|ci|docs|feat|fix|perf|refactor|style|test)(\\(\\S+\\))?!?:( [A-Z][^\\n\\r]+)((\\n\\n.*)|(\\s*))?$"
+schema_pattern = "(?s)(build|chore|ci|docs|feat|fix|perf|refactor|style|test)(\\(\\S+\\))?!?:( [A-Z][^\\n\\r]+)((\\n\\n.*)|(\\s*))?$"
 schema = "<type>(<scope>): <Subject-capitalized>\n<BLANK LINE>\n<body>\n<BLANK LINE>\n(BREAKING CHANGE: )<footer>"
 commit_parser = "^((?P<change_type>build|ci|docs|feat|fix|perf|refactor|style|test|BREAKING CHANGE)(?:\\((?P<scope>[^()\\r\\n]*)\\)|\\()?(?P<breaking>!)?|\\w+!):\\s(?P<message>.*)?"
 change_type_map = {"feat" = "Feature changes", "fix" = "Bug fix", "perf" = "Performance improvements", "build" = "Development changes"}
