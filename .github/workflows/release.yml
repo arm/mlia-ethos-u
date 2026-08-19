@@ -253,6 +253,16 @@ jobs:
           path: dist
       - run: uv publish dist/*
 
+  publish_docs:
+    name: Publish Documentation
+    if: ${{ github.ref_type == 'tag' }}
+    needs: publish_release
+    uses: ./.github/workflows/docs.yml
+    with:
+      publish: true
+      wheel-artifact: built-wheel
+    secrets: inherit
+
   sync_to_public_repo:
     needs:
       - build_and_test_wheel
