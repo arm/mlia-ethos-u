@@ -354,7 +354,8 @@ class EthosUDataAnalyzer(FactExtractor):
             )
             return
         corstone_result = 1
-        breakdowns = standard_out["results"][corstone_result]["breakdowns"]
+        result = standard_out["results"][corstone_result]
+        breakdowns = self.resolve_breakdown_entities(result)
         self.analyze_network_share(breakdowns)
         self.analyze_memory_pressure(breakdowns)
         self.analyze_mac_util(breakdowns)
@@ -374,7 +375,8 @@ class EthosUDataAnalyzer(FactExtractor):
             )
             return
         corstone_result = 0
-        breakdowns = standard_out["results"][corstone_result].get("breakdowns", None)
+        result = standard_out["results"][corstone_result]
+        breakdowns = self.resolve_breakdown_entities(result)
         if breakdowns:
             self.analyze_network_share(breakdowns)
             self.analyze_memory_pressure(breakdowns)
@@ -393,10 +395,34 @@ class EthosUDataAnalyzer(FactExtractor):
             )
             return
         vela_result = 0
-        breakdowns = standard_out["results"][vela_result]["breakdowns"]
+        result = standard_out["results"][vela_result]
+        breakdowns = self.resolve_breakdown_entities(result)
         self.analyze_op_cycles(breakdowns)
         self.analyze_memory_pressure(breakdowns)
         self.analyze_mac_util(breakdowns)
+
+    def resolve_breakdown_entities(self, result: dict) -> list[dict]:
+        """Return breakdowns enriched with their source entity data."""
+        entities_by_id = {
+            entity["id"]: entity
+            for entity in result.get("entities", [])
+            if isinstance(entity, dict) and "id" in entity
+        }
+        resolved = []
+        for breakdown in result.get("breakdowns", []):
+            entity = entities_by_id.get(breakdown.get("entity_id"), {})
+            resolved.append(
+                {
+                    **breakdown,
+                    "name": entity.get("name", breakdown.get("entity_id", "")),
+                    "entity_id": breakdown.get("entity_id", ""),
+                }
+            )
+        return resolved
+
+    def layer_locations_text(self, layer: dict) -> str:
+        """Return the complete standardized entity ID for display/reference."""
+        return str(layer.get("entity_id", ""))
 
     def get_metric_tup(
         self, layer: dict, metric_names: list[str]
@@ -458,7 +484,7 @@ class EthosUDataAnalyzer(FactExtractor):
         for pct, layer in selected:
             layer_fact = EthosULayerHighNetworkShare(
                 operator_name=layer["name"],
-                location=layer["location"],
+                location=self.layer_locations_text(layer),
                 metric="network_share",
                 metric_value=pct,
                 metric_unit="%",
@@ -489,7 +515,7 @@ class EthosUDataAnalyzer(FactExtractor):
         for op_cycles, metric_name, metric_unit, layer in layers_scored[:max_items]:
             layer_fact = EthosULayerHighOpCycles(
                 operator_name=layer["name"],
-                location=layer["location"],
+                location=self.layer_locations_text(layer),
                 metric=metric_name,
                 metric_value=op_cycles,
                 metric_unit=metric_unit,
@@ -525,7 +551,7 @@ class EthosUDataAnalyzer(FactExtractor):
                 if npu_cycles and (max_val / npu_cycles) > 1:
                     layer_fact = EthosULayerHighMemoryPressure(
                         operator_name=layer["name"],
-                        location=layer["location"],
+                        location=self.layer_locations_text(layer),
                         metric=max_name,
                         metric_value=max_val,
                         metric_unit=max_unit,
@@ -559,7 +585,7 @@ class EthosUDataAnalyzer(FactExtractor):
             if severity is not None:
                 layer_fact = EthosULayerLowMacUtil(
                     operator_name=layer["name"],
-                    location=layer["location"],
+                    location=self.layer_locations_text(layer),
                     metric=metric,
                     metric_value=value,
                     metric_unit=unit,

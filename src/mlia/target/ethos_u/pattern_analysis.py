@@ -30,6 +30,7 @@ class IneffectiveActivationPattern(Fact):
     """
 
     affected_layers: list[str] = field(default_factory=list)
+    affected_layer_locations: list[str] = field(default_factory=list)
     layer_count: int = 0
     activation_types: list[str] = field(default_factory=list)
     recommendation: str = ""
@@ -40,6 +41,7 @@ class IneffectiveActivationPattern(Fact):
         result.update(
             {
                 "affected_layers": self.affected_layers,
+                "affected_layer_locations": self.affected_layer_locations,
                 "layer_count": self.layer_count,
                 "activation_types": self.activation_types,
                 "recommendation": self.recommendation,
@@ -133,11 +135,13 @@ class ActivationFunctionPatternAnalyzer(PatternAnalyzer):
             return []
 
         affected_layers = []
+        affected_layer_locations = []
         activation_types_set = set()
 
         for fact in bad_activation_facts:
             if hasattr(fact, "operator_name"):
-                affected_layers.append(f"{fact.operator_name} ({fact.location})")
+                affected_layers.append(fact.operator_name)
+                affected_layer_locations.append(fact.location)
             if hasattr(fact, "activation_type"):
                 activation_types_set.add(fact.activation_type)
 
@@ -161,6 +165,7 @@ class ActivationFunctionPatternAnalyzer(PatternAnalyzer):
 
         pattern = IneffectiveActivationPattern(
             affected_layers=affected_layers,
+            affected_layer_locations=affected_layer_locations,
             layer_count=len(bad_activation_facts),
             activation_types=activation_types,
             recommendation=recommendation,

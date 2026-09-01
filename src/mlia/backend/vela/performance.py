@@ -5,8 +5,10 @@
 from __future__ import annotations
 
 import csv
+import io
 import logging
 import os
+import xml.etree.ElementTree as ET
 from collections import Counter
 from dataclasses import dataclass, field, fields
 from pathlib import Path
@@ -106,6 +108,57 @@ def _model_weight_memory_metric(
             unit=schema.UNIT_BYTES,
         )
     return None
+
+
+def _split_locations(value: str) -> list[str]:
+    """Split semicolon-separated source-model locations."""
+    return [part for part in value.split(";") if part]
+
+
+def _source_operator_entity_id(source_reference: str) -> str:
+    """Return the canonical source-operator entity ID."""
+    return f"source_operator/{source_reference}"
+
+
+def _performance_group_entity_id(index: int) -> str:
+    """Return a result-local entity ID for one aggregate performance row."""
+    return f"performance_group/{index}"
+
+
+def _read_debug_db_table(debug_db_path: Path, table_name: str) -> list[dict[str, str]]:
+    """Read a Vela debug XML table as CSV rows."""
+    if not debug_db_path.is_file():
+        raise FileNotFoundError(f"Vela debug database not found: {debug_db_path}")
+
+    root = ET.parse(debug_db_path).getroot()
+    table = root.find(f"./table[@name='{table_name}']")
+    if table is None or table.text is None:
+        raise ValueError(f"Vela debug database missing table: {table_name}")
+    return list(csv.DictReader(io.StringIO(table.text.strip())))
+
+
+def _debug_db_performance_locations(debug_db_path: Path) -> list[list[str]]:
+    """Return per-performance-row TFLite source locations from Vela debug DB."""
+    source_rows = _read_debug_db_table(debug_db_path, "source")
+    perf_rows = _read_debug_db_table(debug_db_path, "perf")
+
+    ext_key_by_source_id = {
+        row["id"]: row.get("ext_key", "")
+        for row in source_rows
+        if row.get("id") is not None
+    }
+
+    locations: list[list[str]] = []
+    for row in perf_rows:
+        source_id = row.get("source_id")
+        ext_key = ext_key_by_source_id.get(str(source_id))
+        if ext_key is None or ext_key == "" or ext_key == "-1":
+            raise ValueError(
+                "Vela debug database performance row does not map to a TFLite "
+                f"operator index: source_id={source_id!r}"
+            )
+        locations.append([f"operator/{int(ext_key)}"])
+    return locations
 
 
 def _average_memory_usage(layerwise_info: LayerwisePerfInfo) -> float | None:
@@ -354,6 +407,7 @@ class PerformanceMetrics:
             )
         model_metrics = schema.ensure_standard_performance_metrics(model_metrics)
 
+        entities: list[schema.Entity] = []
         breakdowns = []
         for layer_index, layer_info in enumerate(
             self.layerwise_performance_info.layerwise_info
@@ -413,11 +467,60 @@ class PerformanceMetrics:
                         layer_index
                     ]
                 )
+            source_locations = list(dict.fromkeys(layer_info.source_locations))
+            if not source_locations:
+                raise ValueError(
+                    "Vela performance layer is missing canonical source locations: "
+                    f"{layer_info.name!r}"
+                )
+            source_operator_ids = [
+                _source_operator_entity_id(location) for location in source_locations
+            ]
+            for source_operator_id, source_location in zip(
+                source_operator_ids, source_locations
+            ):
+                existing_entity = next(
+                    (entity for entity in entities if entity.id == source_operator_id),
+                    None,
+                )
+                if existing_entity is not None:
+                    if existing_entity.placement != layer_info.placement:
+                        raise ValueError(
+                            "Vela performance rows assign conflicting placements "
+                            f"to {source_operator_id!r}."
+                        )
+                    continue
+                entities.append(
+                    schema.Entity(
+                        id=source_operator_id,
+                        kind=schema.ENTITY_KIND_SOURCE_OPERATOR,
+                        name=source_location,
+                        placement=layer_info.placement,
+                    )
+                )
+            if len(source_operator_ids) == 1:
+                entity_id = source_operator_ids[0]
+            else:
+                entity_id = _performance_group_entity_id(layer_index)
+                entities.append(
+                    schema.Entity(
+                        id=entity_id,
+                        kind="performance_group",
+                        name=layer_info.tflite_operator or layer_info.name,
+                        child_ids=source_operator_ids,
+                        placement=layer_info.placement,
+                        attributes={"layer_name": layer_info.name},
+                    )
+                )
+                for source_operator_id in source_operator_ids:
+                    source_entity = next(
+                        entity for entity in entities if entity.id == source_operator_id
+                    )
+                    if entity_id not in source_entity.parent_ids:
+                        source_entity.parent_ids.append(entity_id)
             breakdowns.append(
                 schema.Breakdown(
-                    scope=schema.OperatorScope.OPERATOR,
-                    name=layer_info.tflite_operator,
-                    location=layer_info.name,
+                    entity_id=entity_id,
                     metrics=breakdown_metrics,
                 )
             )
@@ -431,6 +534,12 @@ class PerformanceMetrics:
             errors=[],
             metrics=model_metrics,
             breakdowns=breakdowns,
+            entities=entities,
+            entity_kinds=[
+                schema.EntityKind(
+                    id="performance_group", child_kinds=["source_operator"]
+                )
+            ],
         )
 
         # Build StandardizedOutput
@@ -464,6 +573,8 @@ class LayerPerfInfo:
     off_chip_flash_access_cycles: int
     mac_count: int
     util_mac_percentage: float
+    placement: str
+    source_locations: list[str]
 
 
 @dataclass
@@ -541,6 +652,20 @@ def extract_metrics_from_row(row_as_dict: dict, metrics: list, key_types: dict) 
     return ids_to_metrics
 
 
+def _layer_placement(raw_target: str | None) -> str:
+    """Return standardized placement from Vela's optional Target column."""
+    if raw_target is None or raw_target == "":
+        # Older Vela CSV formats did not include Target. Preserve compatibility
+        # without claiming that those rows ran on the NPU.
+        return schema.PlacementType.UNKNOWN.value
+    try:
+        return schema.PlacementType(raw_target.upper()).value
+    except ValueError as err:
+        raise ValueError(
+            f"Vela per-layer CSV contains unsupported Target value: {raw_target!r}"
+        ) from err
+
+
 def _extract_optional_layer_metrics(row_as_dict: dict) -> list[schema.Metric]:
     """Extract optional Vela per-layer metrics when the CSV includes them."""
     metrics = []
@@ -562,10 +687,20 @@ def _extract_optional_layer_metrics(row_as_dict: dict) -> list[schema.Metric]:
     return metrics
 
 
-def parse_layerwise_perf_csv(vela_csv_file: Path, metrics: list) -> LayerwisePerfInfo:
+def parse_layerwise_perf_csv(
+    vela_csv_file: Path,
+    metrics: list,
+    debug_db_path: Path | None = None,
+) -> LayerwisePerfInfo:
     """Parse the per-layer csv file from backend vela."""
     if not vela_csv_file.is_file():
         raise FileNotFoundError(f"CSV File not found at {vela_csv_file}\n")
+    debug_locations = (
+        _debug_db_performance_locations(debug_db_path)
+        if debug_db_path is not None
+        else []
+    )
+    debug_location_index = 0
     layerwise_info = []  # type: list[LayerPerfInfo]
     additional_layer_metrics = []  # type: list[list[schema.Metric]]
     with open(vela_csv_file, encoding="UTF-8") as csv_file:
@@ -598,7 +733,21 @@ def parse_layerwise_perf_csv(vela_csv_file: Path, metrics: list) -> LayerwisePer
                 ids_to_metrics = extract_metrics_from_row(
                     row_as_dict, metrics, key_types
                 )
-                layer_info = LayerPerfInfo(**ids_to_metrics)
+                source_locations = []
+                if debug_db_path is not None:
+                    try:
+                        source_locations = debug_locations[debug_location_index]
+                    except IndexError as err:
+                        raise ValueError(
+                            "Vela debug database has fewer performance rows than "
+                            "the per-layer CSV"
+                        ) from err
+                    debug_location_index += 1
+                layer_info = LayerPerfInfo(
+                    **ids_to_metrics,
+                    placement=_layer_placement(row_as_dict.get("Target")),
+                    source_locations=source_locations,
+                )
                 layer_metrics_from_row = _extract_optional_layer_metrics(row_as_dict)
                 if layer_info.op_cycles < 0:
                     raise ValueError(
@@ -609,6 +758,10 @@ def parse_layerwise_perf_csv(vela_csv_file: Path, metrics: list) -> LayerwisePer
                 additional_layer_metrics.append(layer_metrics_from_row)
             except KeyError as err:
                 raise KeyError("Generated CSV missing expected headers") from err
+    if debug_db_path is not None and debug_location_index != len(debug_locations):
+        raise ValueError(
+            "Vela debug database has more performance rows than the per-layer CSV"
+        )
     return LayerwisePerfInfo(
         layerwise_info=layerwise_info,
         additional_layer_metrics=additional_layer_metrics,
@@ -652,8 +805,11 @@ def estimate_performance(
     if csv_file_found is None:
         raise FileNotFoundError("Vela per-layer CSV file not found")
     csv_path = Path(output_dir) / csv_file_found
+    debug_db_path = Path(output_dir) / f"{model_path.stem}_debug.xml"
     layerwise_performance_info = parse_layerwise_perf_csv(
-        vela_csv_file=csv_path, metrics=layer_metrics
+        vela_csv_file=csv_path,
+        metrics=layer_metrics,
+        debug_db_path=debug_db_path,
     )
 
     return _performance_metrics(layerwise_performance_info, summary_data)

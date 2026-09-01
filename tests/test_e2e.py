@@ -11,12 +11,18 @@ import pytest
 
 pytest.importorskip("mlia.testing")
 
+from mlia.core.output_schema import METRIC_NAME_ACCELERATOR_OPERATOR_PERCENTAGE
+from mlia.target.ethos_u.performance_warnings import NPU_ONLY_PERFORMANCE_WARNING
 from mlia.testing import e2e as mlia_e2e
 from mlia.testing.e2e import COMMON_PATTERNS
 from mlia.testing.e2e import COMPATIBILITY_PATTERNS
 from mlia.testing.e2e import PERFORMANCE_PATTERNS
 
-ETHOS_U_LAYER_WISE_PATTERNS = (r".*Layer-Wise Metrics:.*",)
+ETHOS_U_COMPATIBILITY_PATTERNS = (
+    rf".*{re.escape(METRIC_NAME_ACCELERATOR_OPERATOR_PERCENTAGE)}.*",
+)
+ETHOS_U_PERFORMANCE_PATTERNS = (rf".*{re.escape(NPU_ONLY_PERFORMANCE_WARNING)}.*",)
+ETHOS_U_VELA_PERFORMANCE_PATTERNS = (r".*Breakdowns:.*",)
 
 
 def assert_matches(pattern: str, output: str) -> None:
@@ -35,7 +41,11 @@ def test_e2e_compatibility(
     result = mlia_e2e.run_case(case, workdir=tmp_path)
     output = f"{result.stdout}\n{result.stderr}"
     assert result.returncode == 0, f"{case}\n\n{output}"
-    for pattern in (*COMMON_PATTERNS, *COMPATIBILITY_PATTERNS):
+    for pattern in (
+        *COMMON_PATTERNS,
+        *COMPATIBILITY_PATTERNS,
+        *ETHOS_U_COMPATIBILITY_PATTERNS,
+    ):
         assert_matches(pattern, output)
     mlia_e2e.emit_e2e_results(result)
 
@@ -48,9 +58,13 @@ def test_e2e_performance(
     result = mlia_e2e.run_case(case, workdir=tmp_path)
     output = f"{result.stdout}\n{result.stderr}"
     assert result.returncode == 0, f"{case}\n\n{output}"
-    for pattern in (*COMMON_PATTERNS, *PERFORMANCE_PATTERNS):
+    for pattern in (
+        *COMMON_PATTERNS,
+        *PERFORMANCE_PATTERNS,
+        *ETHOS_U_PERFORMANCE_PATTERNS,
+    ):
         assert_matches(pattern, output)
     if expects_vela_layer_wise_metrics(case):
-        for pattern in ETHOS_U_LAYER_WISE_PATTERNS:
+        for pattern in ETHOS_U_VELA_PERFORMANCE_PATTERNS:
             assert_matches(pattern, output)
     mlia_e2e.emit_e2e_results(result)

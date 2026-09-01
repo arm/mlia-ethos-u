@@ -13,7 +13,7 @@ from mlia.core.common import AdviceCategory, DataItem
 from mlia.core.context import ExecutionContext
 from mlia.core.helpers import ActionResolver, APIActionResolver
 from mlia.core.output_schema import AdviceCategory as SchemaAdviceCategory
-from mlia.core.output_schema import AdviceSeverity, OperatorIdentifier, OperatorScope
+from mlia.core.output_schema import AdviceSeverity
 from mlia.target.ethos_u.optimization_shims import OptimizationSettings
 from mlia.target.ethos_u.advice_generation import (
     EthosUAdviceProducer,
@@ -37,7 +37,7 @@ def assert_advices_match(actual: list[Advice], expected: list[Advice]) -> None:
         assert actual_adv.message == expected_adv.message
         assert actual_adv.category == expected_adv.category
         assert actual_adv.severity == expected_adv.severity
-        assert actual_adv.affected_entities == expected_adv.affected_entities
+        assert actual_adv.affected_entity_ids == expected_adv.affected_entity_ids
 
 
 @pytest.mark.parametrize(
@@ -162,6 +162,7 @@ def assert_advices_match(actual: list[Advice], expected: list[Advice]) -> None:
         pytest.param(
             IneffectiveActivationPattern(
                 affected_layers=["Layer1", "Layer2"],
+                affected_layer_locations=["operator/0", "operator/1"],
                 layer_count=2,
                 activation_types=["MISH", "SELU"],
                 recommendation="Consider replacing them with NPU-friendly alternatives.",
@@ -178,17 +179,9 @@ def assert_advices_match(actual: list[Advice], expected: list[Advice]) -> None:
                         "suboptimal activation functions (MISH, SELU). "
                         "Consider replacing them with NPU-friendly alternatives."
                     ),
-                    affected_entities=[
-                        OperatorIdentifier(
-                            scope=OperatorScope.OPERATOR,
-                            name="Layer1",
-                            location="Layer1",
-                        ),
-                        OperatorIdentifier(
-                            scope=OperatorScope.OPERATOR,
-                            name="Layer2",
-                            location="Layer2",
-                        ),
+                    affected_entity_ids=[
+                        "source_operator/operator/0",
+                        "source_operator/operator/1",
                     ],
                 )
             ],

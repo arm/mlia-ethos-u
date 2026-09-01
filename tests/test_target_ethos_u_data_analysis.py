@@ -347,10 +347,19 @@ def test_analyze_activation_function_no_matching_pattern() -> None:
                 standardized_output={
                     "results": [
                         {
+                            "entities": [
+                                {
+                                    "id": "source_operator/operator/0",
+                                    "name": "Conv2D",
+                                },
+                                {
+                                    "id": "source_operator/operator/1",
+                                    "name": "Add",
+                                },
+                            ],
                             "breakdowns": [
                                 {
-                                    "name": "Conv2D",
-                                    "location": "operator/0",
+                                    "entity_id": "source_operator/operator/0",
                                     "metrics": [
                                         {
                                             "name": "npu_cycles",
@@ -375,8 +384,7 @@ def test_analyze_activation_function_no_matching_pattern() -> None:
                                     ],
                                 },
                                 {
-                                    "name": "Add",
-                                    "location": "operator/1",
+                                    "entity_id": "source_operator/operator/1",
                                     "metrics": [
                                         {
                                             "name": "npu_cycles",
@@ -400,7 +408,7 @@ def test_analyze_activation_function_no_matching_pattern() -> None:
                                         },
                                     ],
                                 },
-                            ]
+                            ],
                         }
                     ]
                 },
@@ -408,14 +416,14 @@ def test_analyze_activation_function_no_matching_pattern() -> None:
             [
                 EthosULayerHighNetworkShare(
                     operator_name="Conv2D",
-                    location="operator/0",
+                    location="source_operator/operator/0",
                     metric="network_share",
                     metric_value=45,
                     metric_unit="%",
                 ),
                 EthosULayerHighMemoryPressure(
                     operator_name="Conv2D",
-                    location="operator/0",
+                    location="source_operator/operator/0",
                     metric="dram_access_cycles",
                     metric_value=150,
                     metric_unit="cycles",
@@ -423,7 +431,7 @@ def test_analyze_activation_function_no_matching_pattern() -> None:
                 ),
                 EthosULayerLowMacUtil(
                     operator_name="Conv2D",
-                    location="operator/0",
+                    location="source_operator/operator/0",
                     metric="util_mac_percentage",
                     metric_value=20,
                     metric_unit="%",
@@ -438,10 +446,15 @@ def test_analyze_activation_function_no_matching_pattern() -> None:
                 standardized_output={
                     "results": [
                         {
+                            "entities": [
+                                {
+                                    "id": "source_operator/operator/0",
+                                    "name": "VelaConv2D",
+                                }
+                            ],
                             "breakdowns": [
                                 {
-                                    "name": "VelaConv2D",
-                                    "location": "operator/0",
+                                    "entity_id": "source_operator/operator/0",
                                     "metrics": [
                                         {
                                             "name": "op_cycles",
@@ -450,13 +463,18 @@ def test_analyze_activation_function_no_matching_pattern() -> None:
                                         }
                                     ],
                                 }
-                            ]
+                            ],
                         },
                         {
+                            "entities": [
+                                {
+                                    "id": "source_operator/operator/1",
+                                    "name": "CorstoneConv2D",
+                                }
+                            ],
                             "breakdowns": [
                                 {
-                                    "name": "CorstoneConv2D",
-                                    "location": "operator/1",
+                                    "entity_id": "source_operator/operator/1",
                                     "metrics": [
                                         {"name": "unused_0", "value": 0, "unit": ""},
                                         {"name": "unused_1", "value": 0, "unit": ""},
@@ -468,7 +486,7 @@ def test_analyze_activation_function_no_matching_pattern() -> None:
                                         },
                                     ],
                                 }
-                            ]
+                            ],
                         },
                     ]
                 },
@@ -476,7 +494,7 @@ def test_analyze_activation_function_no_matching_pattern() -> None:
             [
                 EthosULayerHighNetworkShare(
                     operator_name="CorstoneConv2D",
-                    location="operator/1",
+                    location="source_operator/operator/1",
                     metric="network_share",
                     metric_value=60,
                     metric_unit="%",
@@ -490,10 +508,19 @@ def test_analyze_activation_function_no_matching_pattern() -> None:
                 standardized_output={
                     "results": [
                         {
+                            "entities": [
+                                {
+                                    "id": "source_operator/operator/0",
+                                    "name": "Conv2D",
+                                },
+                                {
+                                    "id": "source_operator/operator/1",
+                                    "name": "DepthwiseConv2D",
+                                },
+                            ],
                             "breakdowns": [
                                 {
-                                    "name": "Conv2D",
-                                    "location": "operator/0",
+                                    "entity_id": "source_operator/operator/0",
                                     "metrics": [
                                         {
                                             "name": "op_cycles",
@@ -518,8 +545,7 @@ def test_analyze_activation_function_no_matching_pattern() -> None:
                                     ],
                                 },
                                 {
-                                    "name": "DepthwiseConv2D",
-                                    "location": "operator/1",
+                                    "entity_id": "source_operator/operator/1",
                                     "metrics": [
                                         {
                                             "name": "op_cycles",
@@ -543,7 +569,7 @@ def test_analyze_activation_function_no_matching_pattern() -> None:
                                         },
                                     ],
                                 },
-                            ]
+                            ],
                         }
                     ]
                 },
@@ -551,21 +577,21 @@ def test_analyze_activation_function_no_matching_pattern() -> None:
             [
                 EthosULayerHighOpCycles(
                     operator_name="Conv2D",
-                    location="operator/0",
+                    location="source_operator/operator/0",
                     metric="op_cycles",
                     metric_value=500,
                     metric_unit="cycles",
                 ),
                 EthosULayerHighOpCycles(
                     operator_name="DepthwiseConv2D",
-                    location="operator/1",
+                    location="source_operator/operator/1",
                     metric="op_cycles",
                     metric_value=100,
                     metric_unit="cycles",
                 ),
                 EthosULayerHighMemoryPressure(
                     operator_name="Conv2D",
-                    location="operator/0",
+                    location="source_operator/operator/0",
                     metric="dram_access_cycles",
                     metric_value=120,
                     metric_unit="cycles",
@@ -573,7 +599,7 @@ def test_analyze_activation_function_no_matching_pattern() -> None:
                 ),
                 EthosULayerLowMacUtil(
                     operator_name="Conv2D",
-                    location="operator/0",
+                    location="source_operator/operator/0",
                     metric="util_mac_percentage",
                     metric_value=25,
                     metric_unit="%",

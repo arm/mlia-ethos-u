@@ -2,14 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Ethos-U target module."""
 
-import inspect
-from pathlib import Path
-
 from mlia.plugins.plugins import TargetPlugin
-from mlia.core.handlers import WorkflowEventsHandler
 from mlia.target.ethos_u.advisor import configure_and_get_ethosu_advisor
 from mlia.target.ethos_u.config import EthosUConfiguration, get_default_ethos_u_backends
-from mlia.target.ethos_u.handlers import EthosUEventHandler
 from mlia.target.registry import TargetInfo, TargetRegistry
 
 ETHOS_U85 = "Ethos-U85"
@@ -29,22 +24,6 @@ ETHOS_U55 = "Ethos-U55"
 SUPPORTED_BACKENDS_PRIORITY_ETHOS_U55 = ["vela", "corstone-310", "corstone-300"]
 
 
-def _require_collect_only_handler_support() -> None:
-    """Ensure the installed mlia core supports collect-only API handlers."""
-    parameters = inspect.signature(WorkflowEventsHandler.__init__).parameters
-    if "collect_only" not in parameters:
-        raise RuntimeError(
-            "mlia-ethos-u requires an mlia core version that supports "
-            "WorkflowEventsHandler(..., collect_only=...). Please upgrade mlia."
-        )
-
-
-def _target_info_supports_event_handler_factory() -> bool:
-    """Return whether the installed mlia core exposes API event handler hooks."""
-    parameters = inspect.signature(TargetInfo.__init__).parameters
-    return "event_handler_factory" in parameters
-
-
 def _create_target_info(supported_backends: list[str]) -> TargetInfo:
     """Build TargetInfo while remaining compatible with older mlia cores."""
     kwargs = {
@@ -54,16 +33,7 @@ def _create_target_info(supported_backends: list[str]) -> TargetInfo:
         "target_profile_cls": EthosUConfiguration,
     }
 
-    if _target_info_supports_event_handler_factory():
-        kwargs["event_handler_factory"] = create_ethos_u_api_event_handler
-
     return TargetInfo(**kwargs)
-
-
-def create_ethos_u_api_event_handler(output_dir: Path | None) -> EthosUEventHandler:
-    """Create the Ethos-U event handler used by the Python API."""
-    _require_collect_only_handler_support()
-    return EthosUEventHandler(output_dir, collect_only=True)
 
 
 class EthosUTargetPlugin(TargetPlugin):

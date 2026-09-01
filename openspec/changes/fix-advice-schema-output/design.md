@@ -9,7 +9,7 @@ strings. Ethos-U has two relevant downstream paths:
 - `tests/test_e2e_api.py` normalizes advice entries before comparing CLI and
   Python API JSON output.
 
-The sidecar writer currently bypasses `JSONReporter` and writes advice under
+The sidecar writer previously bypassed the canonical standardized-output path and wrote advice under
 `result["advices"]`. That path must be updated in this repository because core
 reporting cannot rewrite files that the target handler writes directly.
 

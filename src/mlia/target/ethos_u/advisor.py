@@ -8,36 +8,23 @@ import logging
 from pathlib import Path
 from typing import Any, ClassVar, cast
 
-from mlia.core.advice_generation import AdviceProducer
 from mlia.core.advisor import DefaultInferenceAdvisor, InferenceAdvisor
 from mlia.core.common import AdviceCategory
 from mlia.core.context import Context, ExecutionContext
 from mlia.core.data_analysis import DataAnalyzer, PatternAnalyzer
 from mlia.core.data_collection import DataCollector
 from mlia.core.errors import ConfigurationError
-from mlia.core.events import Event
-from mlia.target.ethos_u.advice_generation import (
-    EthosUAdviceProducer,
-    EthosUStaticAdviceProducer,
-)
 from mlia.target.ethos_u.config import EthosUConfiguration
-from mlia.target.ethos_u.data_analysis import EthosUDataAnalyzer
 from mlia.target.ethos_u.data_collection import (
     EthosUOperatorCompatibility,
     EthosUOptimizationPerformance,
     EthosUPerformance,
 )
-from mlia.target.ethos_u.events import EthosUAdvisorStartedEvent
-from mlia.target.ethos_u.handlers import EthosUEventHandler
 from mlia.target.ethos_u.utils.legacy_shims import (
     LEGACY_OPTIMIZATION_AVAILABLE,
     add_common_optimization_params,
 )
 from mlia.target.ethos_u.utils.model_format import is_pte_file, is_tflite_model
-from mlia.target.ethos_u.pattern_analysis import (
-    ActivationFunctionPatternAnalyzer,
-    LayerHotSpotPatternAnalyzer,
-)
 from mlia.target.registry import profile
 from mlia.utils.types import is_list_of
 
@@ -141,30 +128,12 @@ class EthosUInferenceAdvisor(DefaultInferenceAdvisor):
         return collectors
 
     def get_analyzers(self, context: Context) -> list[DataAnalyzer]:
-        """Return list of the data analyzers."""
-        return [
-            EthosUDataAnalyzer(),
-        ]
+        """Return list of workflow data analyzers."""
+        return []
 
     def get_pattern_analyzers(self, context: Context) -> list[PatternAnalyzer]:
-        """Return list of the pattern analyzers."""
-        return [ActivationFunctionPatternAnalyzer(), LayerHotSpotPatternAnalyzer()]
-
-    def get_producers(self, context: Context) -> list[AdviceProducer]:
-        """Return list of the advice producers."""
-        return [
-            EthosUAdviceProducer(),
-            EthosUStaticAdviceProducer(),
-        ]
-
-    def get_events(self, context: Context) -> list[Event]:
-        """Return list of the startup events."""
-        model = self.get_model(context)
-        target_config = self._get_target_config(context)
-
-        return [
-            EthosUAdvisorStartedEvent(target_config=target_config, model=model),
-        ]
+        """Return list of workflow pattern analyzers."""
+        return []
 
     def _get_target_config(self, context: Context) -> EthosUConfiguration:
         """Get target configuration."""
@@ -205,9 +174,6 @@ def configure_and_get_ethosu_advisor(
     **extra_args: Any,
 ) -> InferenceAdvisor:
     """Create and configure Ethos-U advisor."""
-    if context.event_handlers is None:
-        context.event_handlers = [EthosUEventHandler(output_dir=context.output_dir)]
-
     if context.config_parameters is None:
         context.config_parameters = _get_config_parameters(
             model, target_profile, **extra_args

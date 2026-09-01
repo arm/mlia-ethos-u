@@ -31,6 +31,7 @@ from mlia.target.ethos_u.performance import (
     VelaPerformanceResult,
     merge_performance_outputs,
 )
+from mlia.target.ethos_u.result_advice import attach_result_advice
 from mlia.target.ethos_u.utils.model_format import (
     is_pte_file,
     is_pytorch_file,
@@ -112,10 +113,12 @@ class EthosUOperatorCompatibility(ContextAwareDataCollector):
             cli_arguments=cli_args,
         )
 
-        return VelaCompatibilityResult(
+        result = VelaCompatibilityResult(
             legacy_info=operators,
             standardized_output=standardized_output,
         )
+        attach_result_advice(standardized_output, result, self.context)
+        return result
 
     @staticmethod
     def _get_vela_backend_config(compiler_options: Any) -> dict[str, Any]:
@@ -281,25 +284,34 @@ class EthosUPerformance(ContextAwareDataCollector):
                 "Failed to build standardized output from corstone metrics"
             )
 
-        # If both backends produced results, merge them into a single output
-        if vela_output and corstone_output:
+        vela_result = None
+        if vela_output:
+            vela_result = VelaPerformanceResult(
+                legacy_info=perf,
+                standardized_output=vela_output,
+            )
+            attach_result_advice(vela_output, vela_result, self.context)
+
+        corstone_result = None
+        if corstone_output:
+            corstone_result = CorstonePerformanceResult(
+                legacy_info=perf,
+                standardized_output=corstone_output,
+            )
+            attach_result_advice(corstone_output, corstone_result, self.context)
+
+        # Merge complete backend-owned results only after attaching their advice.
+        if vela_result and corstone_result:
             merged_output = merge_performance_outputs(vela_output, corstone_output)
             return CombinedPerformanceResult(
                 legacy_info=perf,
                 standardized_output=merged_output,
             )
 
-        # Return individual results if only one backend was used
-        if vela_output:
-            return VelaPerformanceResult(
-                legacy_info=perf,
-                standardized_output=vela_output,
-            )
-        if corstone_output:
-            return CorstonePerformanceResult(
-                legacy_info=perf,
-                standardized_output=corstone_output,
-            )
+        if vela_result:
+            return vela_result
+        if corstone_result:
+            return corstone_result
 
         return perf
 

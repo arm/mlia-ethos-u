@@ -27,6 +27,21 @@ from mlia.utils.proc import Command, OutputLogger, process_command_output
 logger = logging.getLogger(__name__)
 
 
+def _split_locations(value: str) -> list[str]:
+    """Split semicolon-separated source-model locations."""
+    return [part for part in value.split(";") if part]
+
+
+def _source_operator_entity_id(source_reference: str) -> str:
+    """Return the canonical source-operator entity ID."""
+    return f"source_operator/{source_reference}"
+
+
+def _performance_group_entity_id(index: int) -> str:
+    """Return a result-local entity ID for one aggregate performance row."""
+    return f"performance_group/{index}"
+
+
 _FVP_VERSION_BY_BACKEND = {
     "corstone-300": "300",
     "corstone-310": "310",
@@ -359,17 +374,49 @@ def _build_standard_corstone_metrics(
     return metrics
 
 
-def _build_breakdowns(per_layer_stats: list[dict]) -> list[schema.Breakdown]:
-    """Build Corstone per-layer breakdowns."""
-    return [
-        schema.Breakdown(
-            scope=schema.OperatorScope.OPERATOR,
-            name=stat["NNG Operator"],
-            location=stat["Name"],
-            metrics=_build_per_layer_metrics(stat),
+def _build_per_layer_entities_and_breakdowns(
+    per_layer_stats: list[dict],
+) -> tuple[list[schema.Entity], list[schema.Breakdown]]:
+    """Build Corstone entities and per-layer breakdowns."""
+    entities_by_id: dict[str, schema.Entity] = {}
+    breakdowns = []
+    for idx, stat in enumerate(per_layer_stats):
+        source_locations = list(dict.fromkeys(_split_locations(stat["Name"])))
+        source_operator_ids = [
+            _source_operator_entity_id(location) for location in source_locations
+        ]
+        for source_operator_id, source_location in zip(
+            source_operator_ids, source_locations
+        ):
+            entities_by_id.setdefault(
+                source_operator_id,
+                schema.Entity(
+                    id=source_operator_id,
+                    kind=schema.ENTITY_KIND_SOURCE_OPERATOR,
+                    name=stat["NNG Operator"],
+                    placement=schema.PlacementType.NPU.value,
+                ),
+            )
+        if len(source_operator_ids) == 1:
+            entity_id = source_operator_ids[0]
+        else:
+            entity_id = _performance_group_entity_id(idx)
+            entities_by_id[entity_id] = schema.Entity(
+                id=entity_id,
+                kind="performance_group",
+                name=stat["NNG Operator"] or stat["Name"],
+                child_ids=source_operator_ids,
+                placement=schema.PlacementType.NPU.value,
+            )
+            for source_operator_id in source_operator_ids:
+                entities_by_id[source_operator_id].parent_ids.append(entity_id)
+        breakdowns.append(
+            schema.Breakdown(
+                entity_id=entity_id,
+                metrics=_build_per_layer_metrics(stat),
+            )
         )
-        for stat in per_layer_stats
-    ]
+    return list(entities_by_id.values()), breakdowns
 
 
 @dataclass
@@ -502,7 +549,9 @@ class CorstonePerformanceMetrics:
             )
         )
         metrics = schema.ensure_standard_performance_metrics(metrics)
-        breakdowns = _build_breakdowns(self.npu_per_layer_stats)
+        entities, breakdowns = _build_per_layer_entities_and_breakdowns(
+            self.npu_per_layer_stats
+        )
 
         # Create result
         result = schema.Result(
@@ -514,6 +563,12 @@ class CorstonePerformanceMetrics:
             metrics=metrics,
             mode=schema.ModeType.SIMULATED,  # Corstone is simulation
             breakdowns=breakdowns,
+            entities=entities,
+            entity_kinds=[
+                schema.EntityKind(
+                    id="performance_group", child_kinds=["source_operator"]
+                )
+            ],
         )
 
         return schema.StandardizedOutput(

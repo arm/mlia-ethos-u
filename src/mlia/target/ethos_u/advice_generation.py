@@ -14,7 +14,7 @@ from mlia.core.advice_generation import (
 )
 from mlia.core.common import AdviceCategory, DataItem
 from mlia.core.output_schema import AdviceCategory as SchemaAdviceCategory
-from mlia.core.output_schema import AdviceSeverity, OperatorIdentifier, OperatorScope
+from mlia.core.output_schema import AdviceSeverity
 from mlia.target.ethos_u.common_reporters import (
     ModelIsNotTFLiteCompatible,
     TFLiteCompatibilityCheckFailed,
@@ -218,21 +218,20 @@ class EthosUAdviceProducer(FactBasedAdviceProducer):
             f"{data_item.recommendation}"
         )
 
-        # Create OperatorIdentifier for each affected layer
-        affected_entities = [
-            OperatorIdentifier(
-                scope=OperatorScope.OPERATOR,
-                name=layer_name,
-                location=layer_name,  # Using layer name as location
+        affected_entity_ids = [
+            (
+                layer_location
+                if layer_location.startswith("source_operator/")
+                else f"source_operator/{layer_location}"
             )
-            for layer_name in data_item.affected_layers
+            for layer_location in data_item.affected_layer_locations
         ]
 
         self.add_advice(
             message=message,
             category=SchemaAdviceCategory.PERFORMANCE,
             severity=AdviceSeverity.WARNING,
-            affected_entities=affected_entities,
+            affected_entity_ids=affected_entity_ids,
         )
 
     @produce_advice.register

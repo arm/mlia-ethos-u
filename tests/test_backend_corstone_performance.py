@@ -9,7 +9,7 @@ import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Generator
+from typing import Generator
 from unittest.mock import MagicMock
 
 import pytest
@@ -26,16 +26,7 @@ from mlia.backend.corstone.performance import (
     get_metrics,
 )
 from mlia.backend.errors import BackendExecutionFailed
-from mlia.core.context import ExecutionContext
-from mlia.core.events import AdviceStageFinishedEvent, CollectedDataEvent
 from mlia.core.output_validation import validate_standardized_output
-from mlia.target.ethos_u.config import EthosUConfiguration
-from mlia.target.ethos_u.data_collection import EthosUPerformance
-from mlia.target.ethos_u.handlers import EthosUEventHandler
-from mlia.target.ethos_u.performance import CorstonePerformanceResult
-from mlia.target.ethos_u.performance import (
-    PerformanceMetrics as EthosPerformanceMetrics,
-)
 from mlia.utils.proc import Command
 
 
@@ -873,10 +864,14 @@ def test_performance_metrics_to_standardized_output(
         assert "value" not in metric
         assert metric["reason"]
 
+    assert result["entities"][0] == {
+        "id": "source_operator/op_name",
+        "kind": "source_operator",
+        "name": "op",
+        "placement": "NPU",
+    }
     breakdown = result["breakdowns"][0]
-    assert breakdown["scope"] == "operator"
-    assert breakdown["name"] == "op"
-    assert breakdown["location"] == "op_name"
+    assert breakdown["entity_id"] == "source_operator/op_name"
     assert breakdown["metrics"] == [
         {"name": "npu", "value": 1000.0, "unit": "cycles"},
         {"name": "staging_usage", "value": 150.0, "unit": "bytes"},
@@ -1064,9 +1059,17 @@ def test_performance_metrics_preserves_supported_corstone_layer_statistics(
         target_config={"mac": 1024, "target": "ethos-u85"},
     )
 
-    breakdown = output["results"][0]["breakdowns"][0]
-    assert breakdown["name"] == "Conv2DBias"
-    assert breakdown["location"] == "loc0"
+    result = output["results"][0]
+    breakdown = result["breakdowns"][0]
+    assert breakdown["entity_id"] == "source_operator/loc0"
+    assert result["entities"] == [
+        {
+            "id": "source_operator/loc0",
+            "kind": schema.ENTITY_KIND_SOURCE_OPERATOR,
+            "name": "Conv2DBias",
+            "placement": schema.PlacementType.NPU.value,
+        }
+    ]
     assert {metric["name"]: metric for metric in breakdown["metrics"]} == {
         "staging_usage": {"name": "staging_usage", "value": 150.0, "unit": "bytes"},
         "peak_staging": {"name": "peak_staging", "value": 40.0, "unit": "%"},
@@ -1248,120 +1251,3 @@ def test_performance_metrics_to_standardized_output_reports_zero_utilization(
         "value": 0.0,
         "unit": schema.UNIT_PERCENT,
     }
-
-
-def test_ethosu_collector_and_handler_write_json(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Collector should return CorstonePerformanceResult and handler should write JSON.
-
-    This test does not inject any stubs; it performs imports locally so the
-    test module can be imported without requiring optional backends at module
-    import time. If Vela/related packages are not installed in the test
-    environment, this test will fail during import of the target modules.
-    """
-
-    # Create a test model file
-    model = tmp_path / "model.tflite"
-    model.write_bytes(b"test")
-
-    # Create backend corstone metrics
-    cor_metrics = CorstonePerformanceMetrics(
-        CorstoneModelPerformanceMetrics(
-            npu_active_cycles=10,
-            npu_idle_cycles=2,
-            npu_total_cycles=12,
-            npu_axi0_rd_data_beat_received=1,
-            npu_axi0_wr_data_beat_written=2,
-            npu_axi1_rd_data_beat_received=3,
-        ),
-        [],
-    )
-
-    # Build an Ethos-U legacy PerformanceMetrics instance
-    # and attach corstone metrics
-    target_cfg = EthosUConfiguration(
-        target="ethos-u55",
-        mac=256,
-        system_config="Ethos_U55_High_End_Embedded",
-        memory_mode="Shared_Sram",
-    )
-    ethos_perf = EthosPerformanceMetrics(target_cfg, None, None, None)
-    ethos_perf.corstone_metrics = cor_metrics
-
-    # Monkeypatch the estimator used by the collector to return our prepared metrics
-    class MockEstimator:
-        """Mock estimator for testing."""
-
-        def __init__(
-            self, context: Any, target_config: Any, backends: Any = None
-        ) -> None:
-            pass
-
-        def estimate(self, model_arg: Any) -> Any:
-            """Return test performance metrics."""
-            return ethos_perf
-
-    monkeypatch.setattr(
-        "mlia.target.ethos_u.data_collection.EthosUPerformanceEstimator",
-        MockEstimator,
-    )
-
-    # Monkeypatch get_tflite_model so collector doesn't try to load any TF models
-    monkeypatch.setattr(
-        "mlia.target.ethos_u.data_collection.get_tflite_model", lambda m, c: m
-    )
-
-    # Create collector and run
-    collector = EthosUPerformance(model, target_cfg, backends=["corstone-300"])
-    # Provide minimal context expected by collector
-    # (set by inject_context in real workflow)
-    context = ExecutionContext(output_dir=tmp_path)
-    if hasattr(collector, "set_context"):
-        collector.set_context(context)
-    else:
-        collector.context = context
-    collected = collector.collect_data()
-
-    # Collector should ideally return a CorstonePerformanceResult
-    # when corstone metrics exist. But older code paths may return
-    # PerformanceMetrics; handle both cases.
-    if isinstance(collected, CorstonePerformanceResult):
-        wrapped = collected
-    elif isinstance(collected, EthosPerformanceMetrics):
-        standardized = None
-        try:
-            standardized = collected.to_standardized_output(
-                model_path=model, backend_name="corstone-300"
-            )
-        except Exception:
-            standardized = None
-
-        wrapped = CorstonePerformanceResult(
-            legacy_info=collected, standardized_output=standardized
-        )
-    else:
-        pytest.fail(
-            f"Unexpected collector return type: {type(collected).__name__}. "
-            f"Expected CorstonePerformanceResult or PerformanceMetrics."
-        )
-
-    assert wrapped.standardized_output is not None
-
-    # Now create handler and publish the event
-    # It should save the JSON into tmp_path
-    handler = EthosUEventHandler(output_dir=tmp_path)
-    # Provide a minimal reporter to avoid AttributeError
-    # when handler tries to submit
-    handler.reporter = MagicMock()
-
-    event = CollectedDataEvent(wrapped)
-    handler.on_collected_data(event)
-
-    # Trigger advice stage finished to write JSON output
-    advice_event = AdviceStageFinishedEvent()
-    handler.on_advice_stage_finished(advice_event)
-
-    # Check that a file with corstone_performance.json was created
-    output_file = tmp_path / "corstone_performance.json"
-    assert output_file.exists(), f"Expected JSON output file not found: {output_file}"

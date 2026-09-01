@@ -14,10 +14,6 @@ from mlia.core.common import AdviceCategory
 from mlia.core.context import ExecutionContext
 from mlia.core.data_collection import DataCollector
 
-from mlia.target.ethos_u.advice_generation import (
-    EthosUAdviceProducer,
-    EthosUStaticAdviceProducer,
-)
 from mlia.target.ethos_u.advisor import (
     _OPTIMIZATION_COLLECTOR_NAME,
     EthosUInferenceAdvisor,
@@ -25,15 +21,11 @@ from mlia.target.ethos_u.advisor import (
     _get_optimization_collector_name,
     configure_and_get_ethosu_advisor,
 )
-from mlia.target.ethos_u.data_analysis import EthosUDataAnalyzer
 from mlia.target.ethos_u.data_collection import (
     EthosUOperatorCompatibility,
     EthosUOptimizationPerformance,
     EthosUPerformance,
 )
-from mlia.target.ethos_u.events import EthosUAdvisorStartedEvent
-from mlia.target.ethos_u.handlers import EthosUEventHandler
-from mlia.target.ethos_u.pattern_analysis import ActivationFunctionPatternAnalyzer
 
 
 def fake_add_common_optimization_params(params: dict, extra: dict) -> None:
@@ -431,82 +423,17 @@ def test_get_collectors_raises_runtime_error_when_tflite_optimization_type_is_no
         advisor.get_collectors(ctx)
 
 
-def test_get_analyzers_returns_ethosu_data_analyzer(
+def test_advisor_returns_no_core_managed_analysis_components(
     tmp_path: Path,
     request: pytest.FixtureRequest,
-):
+) -> None:
+    """Advice analysis is owned by each complete target result."""
     ctx = ExecutionContext(output_dir=tmp_path)
     model: Path = request.getfixturevalue("test_tflite_model")
     advisor = configure_and_get_ethosu_advisor(ctx, "ethos-u55-256", str(model))
 
-    analyzers = advisor.get_analyzers(ctx)
-
-    assert len(analyzers) == 1
-    assert isinstance(analyzers[0], EthosUDataAnalyzer)
-
-
-def test_get_pattern_analyzers_returns_activation_function_pattern_analyzer(
-    tmp_path: Path,
-    request: pytest.FixtureRequest,
-):
-    ctx = ExecutionContext(output_dir=tmp_path)
-    model: Path = request.getfixturevalue("test_tflite_model")
-    advisor = configure_and_get_ethosu_advisor(
-        ctx,
-        "ethos-u55-256",
-        str(model),
-    )
-
-    pattern_analyzers = advisor.get_pattern_analyzers(ctx)
-
-    assert len(pattern_analyzers) == 2
-    assert isinstance(
-        pattern_analyzers[0],
-        ActivationFunctionPatternAnalyzer,
-    )
-
-
-def test_get_producers_returns_expected_ethosu_advice_producers(
-    tmp_path: Path,
-    request: pytest.FixtureRequest,
-):
-    ctx = ExecutionContext(output_dir=tmp_path)
-    model: Path = request.getfixturevalue("test_tflite_model")
-    advisor = configure_and_get_ethosu_advisor(
-        ctx,
-        "ethos-u55-256",
-        str(model),
-    )
-
-    producers = advisor.get_producers(ctx)
-
-    assert [type(producer) for producer in producers] == [
-        EthosUAdviceProducer,
-        EthosUStaticAdviceProducer,
-    ]
-
-
-def test_get_events_returns_ethosu_advisor_started_event_with_model_and_target_config(
-    tmp_path: Path,
-    request: pytest.FixtureRequest,
-):
-    ctx = ExecutionContext(output_dir=tmp_path)
-    model: Path = request.getfixturevalue("test_tflite_model")
-    advisor = configure_and_get_ethosu_advisor(
-        ctx,
-        "ethos-u55-256",
-        str(model),
-    )
-
-    model = advisor.get_model(ctx)
-    target_config = advisor._get_target_config(ctx)
-
-    events = advisor.get_events(ctx)
-
-    assert len(events) == 1
-    assert isinstance(events[0], EthosUAdvisorStartedEvent)
-    assert events[0].model == model
-    assert events[0].target_config == target_config
+    assert advisor.get_analyzers(ctx) == []
+    assert advisor.get_pattern_analyzers(ctx) == []
 
 
 def test_configure_and_get_ethosu_advisor_does_not_update_context_unnecessarily(
@@ -514,10 +441,8 @@ def test_configure_and_get_ethosu_advisor_does_not_update_context_unnecessarily(
 ):
     """Test that advisor configuration does not update context when parameters are not None."""
     context = ExecutionContext(output_dir=tmp_path)
-    context.event_handlers = [EthosUEventHandler(output_dir=context.output_dir)]
     context.config_parameters = {"preconfigured": True}
 
-    original_handlers = context.event_handlers
     original_config = context.config_parameters
 
     target_profile = "tgt_profile"
@@ -530,7 +455,6 @@ def test_configure_and_get_ethosu_advisor_does_not_update_context_unnecessarily(
     )
 
     assert isinstance(advisor, EthosUInferenceAdvisor)
-    assert context.event_handlers is original_handlers
     assert context.config_parameters is original_config
 
 
@@ -550,9 +474,6 @@ def test_configure_and_get_ethosu_advisor_correctly_updates_context(
     )
 
     assert isinstance(advisor, EthosUInferenceAdvisor)
-
-    assert len(context.event_handlers) == 1
-    assert isinstance(context.event_handlers[0], EthosUEventHandler)
 
     expected_params = _get_config_parameters(model, target_profile)
     assert context.config_parameters == expected_params
@@ -588,29 +509,6 @@ def test_configure_and_get_ethosu_advisor_invalid_backends(tmp_path: Path) -> No
             "model",
             backends="vela",
         )
-
-
-def test_get_events_returns_advisor_started_event(
-    tmp_path: Path,
-    test_tflite_model: Path,
-) -> None:
-    """Test that get_events returns EthosUAdvisorStartedEvent with expected data."""
-    ctx = ExecutionContext(output_dir=tmp_path)
-
-    advisor = configure_and_get_ethosu_advisor(
-        ctx,
-        "ethos-u55-256",
-        str(test_tflite_model),
-    )
-
-    events = advisor.get_events(ctx)
-
-    assert len(events) == 1
-    event = events[0]
-    assert isinstance(event, EthosUAdvisorStartedEvent)
-    assert Path(event.model) == test_tflite_model
-    assert event.target_config.compiler_options is not None
-    assert event.target_config.compiler_options.output_dir == tmp_path / "mlia-output"
 
 
 def fail_import(name, globals=None, locals=None, fromlist=(), level=0):

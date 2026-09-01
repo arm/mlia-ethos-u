@@ -296,23 +296,29 @@ def test_operators_to_standardized_output(tmp_path: Path) -> None:
 
     assert len(checks) == 3  # One check per operator
     assert len(entities) == 3  # One entity per operator
+    assert [entity["id"] for entity in entities] == [
+        f"source_operator/operator/{index}" for index in range(3)
+    ]
 
     # Verify first operator (supported)
     assert entities[0]["name"] == "conv1"
-    assert entities[0]["scope"] == "operator"
-    assert entities[0]["placement"] == "npu"
+    assert entities[0]["kind"] == "source_operator"
+    assert entities[0]["placement"] == "NPU"
     assert checks[0]["status"] == "pass"
+    assert checks[0]["entity_id"] == entities[0]["id"]
 
     # Verify second operator (CPU only)
     assert entities[1]["name"] == "conv2"
-    assert entities[1]["placement"] == "cpu"
+    assert entities[1]["placement"] == "CPU"
     assert checks[1]["status"] == "fail"
+    assert checks[1]["entity_id"] == entities[1]["id"]
     assert "reasons" in checks[1]["details"]
 
     # Verify third operator (constraint failed)
     assert entities[2]["name"] == "pool1"
-    assert entities[2]["placement"] == "cpu"
+    assert entities[2]["placement"] == "CPU"
     assert checks[2]["status"] == "fail"
+    assert checks[2]["entity_id"] == entities[2]["id"]
     assert "reasons" in checks[2]["details"]
 
 

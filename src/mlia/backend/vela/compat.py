@@ -263,15 +263,18 @@ class Operators:
         entities: list[schema.Entity] = []
 
         for idx, operator in enumerate(self.ops):
-            entity_id = f"op_{idx}"
+            entity_id = f"source_operator/operator/{idx}"
 
             # Create entity for this operator
             entity = schema.Entity(
-                scope=schema.OperatorScope.OPERATOR,
-                name=operator.name,
-                location=f"operator/{idx}",
-                placement="npu" if operator.run_on_npu.supported else "cpu",
                 id=entity_id,
+                kind=schema.ENTITY_KIND_SOURCE_OPERATOR,
+                name=operator.name,
+                placement=(
+                    schema.PlacementType.NPU.value
+                    if operator.run_on_npu.supported
+                    else schema.PlacementType.CPU.value
+                ),
                 attributes={
                     "op_type": operator.op_type,
                     "index": idx,
@@ -295,6 +298,7 @@ class Operators:
             check = schema.Check(
                 id=f"npu_support_{entity_id}",
                 status=status,
+                entity_id=entity_id,
                 details=details,
             )
             checks.append(check)

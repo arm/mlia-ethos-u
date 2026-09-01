@@ -8,7 +8,7 @@ description = "ML Inference Advisor Ethos Plugin"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "mlia>=0.12.1"
+    "mlia==0.12.2.dev21+8ecf30f"
 ]
 keywords = ["ml", "arm", "ethos", "tflite"]
 authors = [{name = "Arm Ltd", email = "mlia@arm.com"}]
@@ -82,7 +82,7 @@ change_type_map = {"feat" = "Feature changes", "fix" = "Bug fix", "perf" = "Perf
 
 [tool.pytest.ini_options]
 addopts = [
-    "--cov=mlia",
+    "--cov=src/mlia",
     "--cov-report=term-missing",
     "--cov-report=xml:coverage.xml",
     "--cov-fail-under=65"

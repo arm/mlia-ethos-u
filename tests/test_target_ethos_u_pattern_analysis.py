@@ -62,14 +62,17 @@ def test_ethos_u_ineffective_activation_pattern_to_dict(
     affected_layers: list[str],
     activation_types: list[str],
 ) -> None:
+    affected_layer_locations = [f"operator/{i}" for i, _ in enumerate(affected_layers)]
     activation_pattern = IneffectiveActivationPattern(
         affected_layers=affected_layers,
+        affected_layer_locations=affected_layer_locations,
         activation_types=activation_types,
     )
 
     got = activation_pattern.to_dict()
 
     assert got["affected_layers"] == affected_layers
+    assert got["affected_layer_locations"] == affected_layer_locations
     assert got["activation_types"] == activation_types
 
 
@@ -94,7 +97,8 @@ def test_has_already_generated_patterns_returns_true_with_pattern() -> None:
             AnalyzePatternsCase(
                 facts=[
                     IneffectiveActivationPattern(
-                        affected_layers=["layer1 (operator/0)"],
+                        affected_layers=["layer1"],
+                        affected_layer_locations=["operator/0"],
                         layer_count=1,
                         activation_types=["TANH"],
                         recommendation=(
@@ -137,8 +141,12 @@ def test_has_already_generated_patterns_returns_true_with_pattern() -> None:
                 expected_patterns=[
                     IneffectiveActivationPattern(
                         affected_layers=[
-                            "conv1 (operator/0)",
-                            "conv2 (operator/1)",
+                            "conv1",
+                            "conv2",
+                        ],
+                        affected_layer_locations=[
+                            "operator/0",
+                            "operator/1",
                         ],
                         layer_count=2,
                         activation_types=["ELU", "TANH"],
@@ -182,9 +190,14 @@ def test_has_already_generated_patterns_returns_true_with_pattern() -> None:
                 expected_patterns=[
                     IneffectiveActivationPattern(
                         affected_layers=[
-                            "mish_layer (operator/0)",
-                            "tanh_layer (operator/1)",
-                            "selu_layer (operator/2)",
+                            "mish_layer",
+                            "tanh_layer",
+                            "selu_layer",
+                        ],
+                        affected_layer_locations=[
+                            "operator/0",
+                            "operator/1",
+                            "operator/2",
                         ],
                         layer_count=3,
                         activation_types=["MISH", "SELU", "TANH"],

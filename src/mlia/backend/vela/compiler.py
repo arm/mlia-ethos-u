@@ -445,6 +445,7 @@ class VelaCompiler:
                         output_format,
                         processed_model_path.as_posix(),
                         "--debug-force-regor",
+                        "--enable-debug-db",
                     ]
                     if self.config_file:
                         main_args.extend(["--config", str(self.config_file)])

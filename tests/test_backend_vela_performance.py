@@ -31,6 +31,7 @@ from mlia.backend.vela.performance import (
     LayerPerfInfo,  # noqa: E402
     LayerwisePerfInfo,  # noqa: E402
     PerformanceMetrics,  # noqa: E402
+    _debug_db_performance_locations,  # noqa: E402
     estimate_performance,  # noqa: E402
     layer_metrics,  # noqa: E402
     parse_layerwise_perf_csv,  # noqa: E402
@@ -61,9 +62,7 @@ class ExpectedMetric(TypedDict):
 class ExpectedBreakdown(TypedDict):
     """Expected standardized breakdown representation."""
 
-    scope: str
-    name: str
-    location: str
+    entity_id: str
     metrics: dict[str, ExpectedMetric]
 
 
@@ -111,10 +110,17 @@ def test_estimate_performance_csv_parser_called(
     csv_file_name = target_config.compiler_options.output_dir / (
         test_tflite_model.stem + "_per-layer.csv"
     )
+    debug_db_path = target_config.compiler_options.output_dir / (
+        test_tflite_model.stem + "_debug.xml"
+    )
     mock = MagicMock()
     monkeypatch.setattr("mlia.backend.vela.performance.parse_layerwise_perf_csv", mock)
     estimate_performance(test_tflite_model, target_config.compiler_options)
-    mock.assert_called_with(vela_csv_file=csv_file_name, metrics=layer_metrics)
+    mock.assert_called_with(
+        vela_csv_file=csv_file_name,
+        metrics=layer_metrics,
+        debug_db_path=debug_db_path,
+    )
 
 
 LAYERWISE_TMP_DATA_STR = """
@@ -158,6 +164,12 @@ CONV_2D,Conv2DBias,11936,7312.0,7312.0,2000.0,0.0,0.0,0.0,73008,3.90026668490153
 MAX_POOL_2D,MaxPool,10944,2992.0,1330.0,2992.0,0.0,0.0,0.0,6912,0.9024064171122994,sequential/max_pooling2d/MaxPool
 """.strip()  # noqa: E501
 
+LAYERWISE_TARGET_TMP_DATA_STR = """
+TFLite_operator,NNG Operator,Target,SRAM Usage,Op Cycles,NPU,SRAM AC,DRAM AC,OnFlash AC,OffFlash AC,MAC Count,Util%,Name
+CONV_2D,Conv2DBias,NPU,11936,7312.0,7312.0,2000.0,0.0,0.0,0.0,73008,3.9002666849015313,sequential/conv1/Relu;sequential/conv1/Conv2D
+MAX_POOL_2D,Passthrough,CPU,0,0.0,0.0,0.0,0.0,0.0,0.0,0,100.0,sequential/max_pooling2d/MaxPool
+""".strip()  # noqa: E501
+
 EXPECTED_ROWS = [
     {
         "name": "sequential/conv1/Relu;sequential/conv1/Conv2D",
@@ -171,6 +183,8 @@ EXPECTED_ROWS = [
         "off_chip_flash_access_cycles": 0,
         "mac_count": 73008,
         "util_mac_percentage": 3.9002666849015313,
+        "placement": schema.PlacementType.UNKNOWN.value,
+        "source_locations": [],
     },
     {
         "name": "sequential/max_pooling2d/MaxPool",
@@ -184,6 +198,8 @@ EXPECTED_ROWS = [
         "off_chip_flash_access_cycles": 0,
         "mac_count": 6912,
         "util_mac_percentage": 0.9024064171122994,
+        "placement": schema.PlacementType.UNKNOWN.value,
+        "source_locations": [],
     },
 ]
 
@@ -230,9 +246,12 @@ def test_parse_layerwise_csv_populates_fields_correctly(
         for field_name, expected_type in hints.items():
             got_val = getattr(got, field_name)
             exp_val = exp[field_name]
-            assert isinstance(got_val, expected_type), (
-                f"{field_name} has wrong type: {type(got_val)} != {expected_type}"
-            )
+            if field_name == "source_locations":
+                assert isinstance(got_val, list)
+            else:
+                assert isinstance(got_val, expected_type), (
+                    f"{field_name} has wrong type: {type(got_val)} != {expected_type}"
+                )
             if expected_type is float:
                 assert got_val == pytest.approx(exp_val)
             else:
@@ -290,6 +309,18 @@ def test_parse_layerwise_csv_omits_absent_optional_metrics(
 
     assert layerwise.layerwise_info == [LayerPerfInfo(**row) for row in EXPECTED_ROWS]
     assert layerwise.additional_layer_metrics == [[], []]
+
+
+def test_parse_layerwise_csv_preserves_target_placement(test_csv_file: Path) -> None:
+    """Vela's Target column is the source of truth for layer placement."""
+    test_csv_file.write_text(LAYERWISE_TARGET_TMP_DATA_STR, encoding="utf8")
+
+    layerwise = parse_layerwise_perf_csv(test_csv_file, layer_metrics)
+
+    assert [layer.placement for layer in layerwise.layerwise_info] == [
+        schema.PlacementType.NPU.value,
+        schema.PlacementType.CPU.value,
+    ]
 
 
 LAYERWISE_TMP_DATA_MISSING_HEADER_STR = """
@@ -433,6 +464,8 @@ def _get_perf_metrics() -> PerformanceMetrics:
             off_chip_flash_access_cycles=0,
             mac_count=73008,
             util_mac_percentage=3.9002666849015313,
+            placement=schema.PlacementType.NPU.value,
+            source_locations=["operator/0"],
         ),
         LayerPerfInfo(
             name="sequential/max_pooling2d/MaxPool",
@@ -446,6 +479,8 @@ def _get_perf_metrics() -> PerformanceMetrics:
             off_chip_flash_access_cycles=0,
             mac_count=6912,
             util_mac_percentage=0.9024064171122994,
+            placement=schema.PlacementType.NPU.value,
+            source_locations=["operator/1"],
         ),
     ]
 
@@ -641,11 +676,29 @@ def test_to_standardized_output(
     assert len(results["breakdowns"]) == 2
     breakdowns = results["breakdowns"]
 
+    expected_entities = [
+        {
+            "id": "source_operator/operator/0",
+            "kind": "source_operator",
+            "name": "CONV_2D",
+            "placement": "NPU",
+            "attributes": {
+                "layer_name": "sequential/conv1/Relu;sequential/conv1/Conv2D"
+            },
+        },
+        {
+            "id": "source_operator/operator/1",
+            "kind": "source_operator",
+            "name": "MAX_POOL_2D",
+            "placement": "NPU",
+            "attributes": {"layer_name": "sequential/max_pooling2d/MaxPool"},
+        },
+    ]
+    assert results["entities"] == expected_entities
+
     expected_breakdowns: list[ExpectedBreakdown] = [
         {
-            "scope": "operator",
-            "name": "CONV_2D",
-            "location": "sequential/conv1/Relu;sequential/conv1/Conv2D",
+            "entity_id": "source_operator/operator/0",
             "metrics": {
                 "op_cycles": {"name": "op_cycles", "value": 7312, "unit": "cycles"},
                 "npu_cycles": {"name": "npu_cycles", "value": 7312, "unit": "cycles"},
@@ -694,9 +747,7 @@ def test_to_standardized_output(
             },
         },
         {
-            "scope": "operator",
-            "name": "MAX_POOL_2D",
-            "location": "sequential/max_pooling2d/MaxPool",
+            "entity_id": "source_operator/operator/1",
             "metrics": {
                 "op_cycles": {"name": "op_cycles", "value": 2992, "unit": "cycles"},
                 "npu_cycles": {"name": "npu_cycles", "value": 1330, "unit": "cycles"},
@@ -747,14 +798,28 @@ def test_to_standardized_output(
     ]
 
     for i, expected in enumerate(expected_breakdowns):
-        assert breakdowns[i]["scope"] == expected["scope"]
-        assert breakdowns[i]["name"] == expected["name"]
-        assert breakdowns[i]["location"] == expected["location"]
+        assert breakdowns[i]["entity_id"] == expected["entity_id"]
         assert len(breakdowns[i]["metrics"]) == len(expected["metrics"])
 
         metrics = {m["name"]: m for m in breakdowns[i]["metrics"]}
         for metric_name, expected_metric in expected["metrics"].items():
             assert metrics[metric_name] == expected_metric
+
+
+def test_to_standardized_output_preserves_layer_placement(
+    test_tflite_model: Path,
+) -> None:
+    """Performance entities use Vela placement rather than assuming NPU."""
+    perf_metrics = _get_perf_metrics()
+    perf_metrics.layerwise_performance_info.layerwise_info[
+        1
+    ].placement = schema.PlacementType.CPU.value
+
+    output = perf_metrics.to_standardized_output(test_tflite_model)
+
+    entities = {entity["id"]: entity for entity in output["results"][0]["entities"]}
+    assert entities["source_operator/operator/0"]["placement"] == "NPU"
+    assert entities["source_operator/operator/1"]["placement"] == "CPU"
 
 
 def test_performance_metrics_preserves_vela_summary_statistics(
@@ -874,6 +939,31 @@ def test_performance_metrics_preserves_vela_summary_statistics(
         "passes_after_fusing",
     ):
         assert configuration_metric not in metrics
+
+
+def test_debug_db_performance_locations_use_source_ext_key(tmp_path: Path) -> None:
+    """Vela debug DB ext_key values provide canonical TFLite operator locations."""
+    debug_db = tmp_path / "model_debug.xml"
+    debug_db.write_text(
+        """<?xml version='1.0' encoding='UTF-8'?>
+<debug source="model.tflite" optimised="model_vela.tflite">
+  <table name='source'><![CDATA["id","operator","kernel_w","kernel_h","ofm_w","ofm_h","ofm_d","ext_key"
+0,"Conv2D",1,1,1,1,1,7
+1,"Softmax",1,1,1,1,1,68
+]]></table>
+  <table name='perf'><![CDATA["source_id","name"
+0,"untrusted name"
+1,"another untrusted name"
+]]></table>
+</debug>
+""",
+        encoding="utf-8",
+    )
+
+    assert _debug_db_performance_locations(debug_db) == [
+        ["operator/7"],
+        ["operator/68"],
+    ]
 
 
 def test_to_standardized_output_validates_against_schema(

@@ -95,7 +95,7 @@ def test_coverstone_fvp_no_version_found() -> None:
         corestone_fvp.get_fvp_version()
 
 
-@pytest.mark.skipif(platform.system() == "Darwin", reason="No runner for platform")
+@pytest.mark.skipif(platform.system() != "Linux", reason="No runner for platform")
 @pytest.mark.parametrize(
     "corstone_name", ["corstone-300", "corstone-310", "corstone-320"]
 )

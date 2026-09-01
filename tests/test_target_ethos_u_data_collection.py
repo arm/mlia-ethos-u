@@ -373,6 +373,11 @@ def test_operator_compatibility_pytorch_model(
         MagicMock(return_value=mock_result),
     )
 
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.data_collection.attach_result_advice",
+        MagicMock(),
+    )
+
     collector = EthosUOperatorCompatibility(pytorch_model, target)
     collector.set_context(sample_context)
 
@@ -404,6 +409,11 @@ def test_operator_compatibility_tosa_model(
     monkeypatch.setattr(
         "mlia.target.ethos_u.data_collection.supported_operators",
         MagicMock(return_value=mock_result),
+    )
+
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.data_collection.attach_result_advice",
+        MagicMock(),
     )
 
     collector = EthosUOperatorCompatibility(tosa_model, target)
