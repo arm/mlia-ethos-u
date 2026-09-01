@@ -72,6 +72,19 @@ _CORSTONE_MEMORY_USAGE_COLUMNS = (
 )
 _CORSTONE_OP_CYCLES_COLUMN = "Op Cycles"
 
+_ADDITIVE_PER_LAYER_STATS = frozenset(
+    {
+        "Op Cycles",
+        "NPU",
+        "SRAM AC",
+        "DRAM AC",
+        "OnFlash AC",
+        "OffFlash AC",
+        "MAC Count",
+    }
+)
+_MAXIMUM_PER_LAYER_STATS = frozenset(_CORSTONE_MEMORY_USAGE_COLUMNS)
+
 # A superset of stats from all corstone versions
 _PER_LAYERS_STAT_UNITS = {
     "Staging Usage": "bytes",
@@ -104,11 +117,19 @@ def _build_per_layer_metrics(stat: dict) -> list[schema.Metric]:
         unit = _PER_LAYERS_STAT_UNITS.get(name)
         if unit is None or value in (None, ""):
             continue
+        aggregation = (
+            schema.AggregationType.SUM
+            if name in _ADDITIVE_PER_LAYER_STATS
+            else schema.AggregationType.MAX
+            if name in _MAXIMUM_PER_LAYER_STATS
+            else None
+        )
         metrics.append(
             schema.Metric(
                 _sanitize_metric_name(name),
                 float(value),
                 unit,
+                aggregation=aggregation,
             )
         )
     return metrics

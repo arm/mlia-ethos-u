@@ -873,9 +873,24 @@ def test_performance_metrics_to_standardized_output(
     breakdown = result["breakdowns"][0]
     assert breakdown["entity_id"] == "source_operator/op_name"
     assert breakdown["metrics"] == [
-        {"name": "npu", "value": 1000.0, "unit": "cycles"},
-        {"name": "staging_usage", "value": 150.0, "unit": "bytes"},
-        {"name": "op_cycles", "value": 300.0, "unit": "cycles"},
+        {
+            "name": "npu",
+            "value": 1000.0,
+            "unit": "cycles",
+            "aggregation": "sum",
+        },
+        {
+            "name": "staging_usage",
+            "value": 150.0,
+            "unit": "bytes",
+            "aggregation": "max",
+        },
+        {
+            "name": "op_cycles",
+            "value": 300.0,
+            "unit": "cycles",
+            "aggregation": "sum",
+        },
     ]
 
 
@@ -1070,7 +1085,31 @@ def test_performance_metrics_preserves_supported_corstone_layer_statistics(
             "placement": schema.PlacementType.NPU.value,
         }
     ]
-    assert {metric["name"]: metric for metric in breakdown["metrics"]} == {
+    metrics_by_name = {metric["name"]: metric for metric in breakdown["metrics"]}
+    assert {
+        name: metric.get("aggregation") for name, metric in metrics_by_name.items()
+    } == {
+        "staging_usage": "max",
+        "peak_staging": None,
+        "op_cycles": "sum",
+        "network_cycles": None,
+        "npu": "sum",
+        "sram_ac": "sum",
+        "dram_ac": "sum",
+        "onflash_ac": "sum",
+        "offflash_ac": "sum",
+        "mac_count": "sum",
+        "network_mac": None,
+        "util_mac": None,
+        "sram_usage": "max",
+        "peak": None,
+        "network": None,
+        "util": None,
+    }
+    assert {
+        name: {key: value for key, value in metric.items() if key != "aggregation"}
+        for name, metric in metrics_by_name.items()
+    } == {
         "staging_usage": {"name": "staging_usage", "value": 150.0, "unit": "bytes"},
         "peak_staging": {"name": "peak_staging", "value": 40.0, "unit": "%"},
         "op_cycles": {"name": "op_cycles", "value": 300.0, "unit": "cycles"},

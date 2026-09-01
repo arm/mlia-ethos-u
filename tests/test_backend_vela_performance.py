@@ -804,8 +804,26 @@ def test_to_standardized_output(
         assert len(breakdowns[i]["metrics"]) == len(expected["metrics"])
 
         metrics = {m["name"]: m for m in breakdowns[i]["metrics"]}
+        additive_metrics = {
+            "op_cycles",
+            "npu_cycles",
+            "sram_access_cycles",
+            "dram_access_cycles",
+            "on_chip_flash_access_cycles",
+            "off_chip_flash_access_cycles",
+            "mac_count",
+        }
         for metric_name, expected_metric in expected["metrics"].items():
-            assert metrics[metric_name] == expected_metric
+            metric = metrics[metric_name]
+            if metric_name in additive_metrics:
+                assert metric["aggregation"] == "sum"
+            elif metric_name == "sram_usage":
+                assert metric["aggregation"] == "max"
+            else:
+                assert "aggregation" not in metric
+            assert {
+                key: value for key, value in metric.items() if key != "aggregation"
+            } == expected_metric
 
 
 def test_to_standardized_output_preserves_layer_placement(
@@ -1104,3 +1122,33 @@ def test_to_standarized_output_kwargs(test_tflite_model: Path) -> None:
         "backend_key": "backend_val"
     }
     assert standardized_output["context"] == {"cli_arguments": ["--arg1"]}
+
+
+def test_breakdown_metrics_declare_projection_aggregation_policies(
+    test_tflite_model: Path,
+) -> None:
+    """Vela breakdown metrics should identify additive and peak semantics."""
+    output = _get_perf_metrics().to_standardized_output(test_tflite_model)
+    metrics = {
+        metric["name"]: metric
+        for metric in output["results"][0]["breakdowns"][0]["metrics"]
+    }
+
+    for name in (
+        "op_cycles",
+        "npu_cycles",
+        "sram_access_cycles",
+        "dram_access_cycles",
+        "on_chip_flash_access_cycles",
+        "off_chip_flash_access_cycles",
+        "mac_count",
+    ):
+        assert metrics[name]["aggregation"] == "sum"
+    assert metrics["sram_usage"]["aggregation"] == "max"
+    for name in (
+        "util_mac_percentage",
+        "peak_sram_usage_percentage",
+        "op_cycles_network_percentage",
+        "mac_count_network_percentage",
+    ):
+        assert "aggregation" not in metrics[name]
