@@ -82,7 +82,9 @@ change_type_map = {"feat" = "Feature changes", "fix" = "Bug fix", "perf" = "Perf
 
 [tool.pytest.ini_options]
 addopts = [
-    "--cov=src/mlia",
+    "--cov=mlia.backend.corstone",
+    "--cov=mlia.backend.vela",
+    "--cov=mlia.target.ethos_u",
     "--cov-report=term-missing",
     "--cov-report=xml:coverage.xml",
     "--cov-fail-under=65"
