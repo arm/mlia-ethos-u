@@ -7,6 +7,7 @@ from __future__ import annotations
 import csv
 import io
 import logging
+import math
 import os
 import xml.etree.ElementTree as ET
 from collections import Counter
@@ -676,13 +677,18 @@ def _extract_optional_layer_metrics(row_as_dict: dict) -> list[schema.Metric]:
                 continue
             if row_as_dict[title] == "":
                 continue
-            metrics.append(
-                schema.Metric(
-                    name=key,
-                    value=float(row_as_dict[title]),
-                    unit=_VELA_OPTIONAL_LAYER_METRIC_UNITS[key],
+            value = float(row_as_dict[title])
+            # Optional Vela percentage columns can contain NaN when no NPU work
+            # was measured. Omit those values rather than constructing a metric
+            # that cannot be represented by strict JSON.
+            if math.isfinite(value):
+                metrics.append(
+                    schema.Metric(
+                        name=key,
+                        value=value,
+                        unit=_VELA_OPTIONAL_LAYER_METRIC_UNITS[key],
+                    )
                 )
-            )
             break
     return metrics
 
@@ -851,10 +857,17 @@ def _summary_metrics(summary_data: VelaSummary) -> list[schema.Metric]:
         value = getattr(summary_data, field_name, None)
         if value is None:
             continue
+        metric_value = _summary_metric_value(field_name, value)
+        # Vela uses NaN when a statistic cannot be calculated, for example when
+        # a model has no NPU cycles. That is missing data, not a JSON number, so
+        # omit backend-specific metrics and let the standard-metric helper add
+        # an explicit unavailable entry where the metric has a standard name.
+        if not math.isfinite(metric_value):
+            continue
         metrics.append(
             schema.Metric(
                 name=source_name,
-                value=_summary_metric_value(field_name, value),
+                value=metric_value,
                 unit=unit,
             )
         )

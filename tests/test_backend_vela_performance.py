@@ -5,6 +5,7 @@
 import tempfile
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, TypedDict, get_type_hints
 from unittest.mock import MagicMock
 
@@ -32,6 +33,7 @@ from mlia.backend.vela.performance import (
     LayerwisePerfInfo,  # noqa: E402
     PerformanceMetrics,  # noqa: E402
     _debug_db_performance_locations,  # noqa: E402
+    _summary_metrics,  # noqa: E402
     estimate_performance,  # noqa: E402
     layer_metrics,  # noqa: E402
     parse_layerwise_perf_csv,  # noqa: E402
@@ -939,6 +941,33 @@ def test_performance_metrics_preserves_vela_summary_statistics(
         "passes_after_fusing",
     ):
         assert configuration_metric not in metrics
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_non_finite_vela_summary_statistics_are_unavailable_or_omitted(
+    test_tflite_model: Path, value: float
+) -> None:
+    """Vela sentinel floats must not become invalid standardized JSON values."""
+    perf_metrics = _get_perf_metrics()
+    perf_metrics.additional_summary_metrics = [
+        metric
+        for metric in perf_metrics.additional_summary_metrics
+        if metric.name != schema.METRIC_NAME_INFERENCE_TIME
+    ]
+    perf_metrics.additional_summary_metrics.extend(
+        _summary_metrics(SimpleNamespace(inference_time=value, nn_tops=value))
+    )
+
+    output = perf_metrics.to_standardized_output(test_tflite_model)
+
+    metrics = {metric["name"]: metric for metric in output["results"][0]["metrics"]}
+    assert metrics[schema.METRIC_NAME_INFERENCE_TIME] == {
+        "name": schema.METRIC_NAME_INFERENCE_TIME,
+        "unit": schema.UNIT_MILLISECONDS,
+        "availability": "unavailable",
+        "reason": "Inference latency data is not available.",
+    }
+    assert "nn_tops" not in metrics
 
 
 def test_debug_db_performance_locations_use_source_ext_key(tmp_path: Path) -> None:
