@@ -9,8 +9,8 @@ SPDX-License-Identifier: Apache-2.0
 
 This package provides the MLIA target plugin for Arm Ethos-U NPUs. It is the
 part of the MLIA ecosystem responsible for Ethos-U-specific target profiles,
-operator analysis, reporting, and the backend wiring needed for performance and
-compatibility flows.
+operator analysis, result-owned advice, standardized output, and the backend
+wiring needed for performance and compatibility flows.
 
 The plugin is intended for LiteRT / TensorFlow Lite `.tflite` models that will
 be analysed against
@@ -72,7 +72,7 @@ mlia check model.tflite --target-profile ethos-u55-256 --performance --backend v
 Run a more detailed performance flow with a Corstone backend:
 
 ```bash
-mlia check model.tflite --target-profile ethos-u65-512 --performance --backend corstone
+mlia check model.tflite --target-profile ethos-u65-512 --performance --backend corstone-310
 ```
 
 Run a supported ExecuTorch AOT flow through Corstone:
@@ -101,13 +101,14 @@ of this package's bundled backend assets.
 
 ## Performance and compatibility outputs
 
-This package contributes the target-specific analysis and reporting pipeline that
-produces:
+This package collects target-specific standardized results and attaches advice
+to the result that produced it. Core MLIA then post-processes and renders that
+output. The plugin contributes:
 
 - Operator compatibility information.
 - Model-level performance estimates.
-- Per-operator reporting and advice.
-- Target-aware guidance for compatibility and performance findings.
+- Per-operator and per-layer breakdowns linked to standardized entities.
+- Target-aware advice for compatibility and performance findings.
 
 The exact metrics depend on which backend is used. See [backends.md](backends.md)
 for the split between Vela and Corstone responsibilities.

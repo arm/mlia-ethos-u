@@ -35,24 +35,62 @@ you return to when something needs explanation.
 
 ## Example JSON shape
 
-A simplified result shape might look like this:
+Metrics are represented as objects in a list. Per-operator and per-layer metrics
+are stored in breakdowns linked to result-local entities:
 
 ```json
 {
-  "target": {"profile": "ethos-u55-256"},
-  "backends": [{"name": "vela"}],
+  "backends": [{"id": "vela", "name": "Vela Compiler"}],
   "results": [
     {
-      "metrics": {
-        "total_cycles": 123456,
-        "npu_cycles": 120000,
-        "inference_time": 0.207,
-        "model_weight_memory": 4096
-      }
+      "kind": "performance",
+      "producer": "vela",
+      "metrics": [
+        {"name": "total_cycles", "value": 123456, "unit": "cycles"},
+        {"name": "inference_time", "value": 207.0, "unit": "ms"},
+        {"name": "model_weight_memory", "value": 4096, "unit": "bytes"}
+      ],
+      "entities": [
+        {
+          "id": "source_operator/operator/0",
+          "kind": "source_operator",
+          "name": "operator/0",
+          "placement": "NPU"
+        }
+      ],
+      "breakdowns": [
+        {
+          "entity_id": "source_operator/operator/0",
+          "metrics": [
+            {
+              "name": "op_cycles",
+              "value": 1000,
+              "unit": "cycles",
+              "aggregation": "sum"
+            },
+            {
+              "name": "sram_usage",
+              "value": 4096,
+              "unit": "bytes",
+              "aggregation": "max"
+            }
+          ]
+        }
+      ]
     }
   ]
 }
 ```
+
+Vela and Corstone mark additive layer counters, such as cycles, accesses, and
+MAC counts, with `aggregation: "sum"`. Layer memory usage uses
+`aggregation: "max"`. Percentage metrics are descriptive and do not declare an
+aggregation policy.
+
+Vela omits non-finite backend values such as `NaN`, which cannot be represented
+in strict JSON. When a standardized metric is unavailable, the output contains
+an explicit unavailable metric entry where the shared schema supports one;
+backend-specific optional metrics may simply be absent.
 
 ## What to read first in a Vela run
 
@@ -89,7 +127,7 @@ Use them to decide whether the next step should be to:
 
 ## What to read first in a Corstone run
 
-When the run uses `corstone`, start with:
+When the run uses a Corstone backend, start with:
 
 1. The total cycle picture.
 2. Active-versus-idle style metrics.
@@ -140,7 +178,7 @@ troubleshooting problem before drawing performance conclusions.
 
 ## Cross-links
 
-- See [backends.md](backends.md) for choosing between `vela` and `corstone`.
+- See [backends.md](backends.md) for choosing between Vela and Corstone.
 - See [cli.md](cli.md) for commands that produce these results.
 - See [troubleshooting.md](troubleshooting.md) if output is missing,
   incomplete, or surprising.

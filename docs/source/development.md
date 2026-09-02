@@ -8,8 +8,8 @@ SPDX-License-Identifier: Apache-2.0
 ## What counts as development in this repo
 
 This repository provides Ethos-U target support and the Ethos-U backend path.
-Changes here often affect target profiles, backend registration, reporting, and
-the MLIA user workflow.
+Changes here often affect target profiles, backend registration, standardized
+output, result-owned advice, and the MLIA user workflow.
 
 ## Local setup
 
@@ -58,7 +58,7 @@ When you change one of these areas, review the others too:
 - Target profile definitions and target-related tests.
 - Vela integration and compatibility or performance expectations.
 - Corstone integration and backend registration behaviour.
-- Advice generation or reporting logic and user-facing output examples.
+- Result-owned advice or standardized-output logic and user-facing examples.
 
 ## Good review questions
 

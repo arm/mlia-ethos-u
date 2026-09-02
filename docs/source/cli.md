@@ -14,7 +14,7 @@ A sensible first sequence is:
 1. List what is installed with `mlia target list` and `mlia backend list`.
 2. Run one compatibility command.
 3. Run one performance command with `vela`.
-4. Only then add `corstone` or `--json`.
+4. Only then add a target-compatible Corstone backend or `--json`.
 
 ## Compatibility
 
@@ -50,13 +50,14 @@ promising and where the main cost seems to be.
 
 ## Deeper performance investigation
 
-Use `corstone` when you want more detail than the quick estimate gives you:
+Use a target-compatible Corstone backend when you want more detail than the
+quick estimate gives you. For example, Ethos-U65 supports `corstone-310`:
 
 ```bash
 mlia check model.tflite \
   --target-profile ethos-u65-512 \
   --performance \
-  --backend corstone
+  --backend corstone-310
 ```
 
 If you are trying to decide whether the deeper path changes your view of the
@@ -67,7 +68,7 @@ mlia check model.tflite \
   --target-profile ethos-u65-512 \
   --performance \
   --backend vela \
-  --backend corstone
+  --backend corstone-310
 ```
 
 ## ExecuTorch AOT through Corstone
@@ -116,14 +117,15 @@ If the result is not making sense, try this sequence:
 1. Rerun with one explicit backend at a time.
 2. Start with compatibility if unsupported mapping looks likely.
 3. Compare the top-level cycle counts before reading deeper detail.
-4. Use `corstone` only after you know what the quick estimate is telling you.
+4. Use Corstone only after you know what the quick estimate is telling you.
 
 ## Quick rules of thumb
 
 - Use `--compatibility` first if you suspect unsupported operators.
 - Use `--backend vela` first if you want the fastest useful answer.
-- Use `--backend corstone` when you need deeper evidence before deciding what
-  to change.
+- Use a target-compatible Corstone backend such as `corstone-300`,
+  `corstone-310`, or `corstone-320` when you need deeper evidence before
+  deciding what to change.
 - Use `.pt2` or `.pte` with Corstone only when you are explicitly exercising
   the ExecuTorch AOT path.
 - Use `--json` when the result is something you expect to compare or archive.

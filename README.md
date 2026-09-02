@@ -12,7 +12,7 @@ The package is distributed as `mlia-ethos-u` and contributes:
 
 - The `ethos_u` target plugin.
 - The `vela` backend plugin.
-- The `corstone` backend plugin.
+- The Corstone backend plugin, which registers target-specific Corstone backends.
 - Bundled Ethos-U target profiles and Vela configuration assets.
 
 ## Table of Contents
@@ -61,7 +61,7 @@ These profiles are shipped under `src/mlia/resources/target_profiles/`.
 ### Vela
 
 The Vela backend is used for compiler-oriented analysis, compatibility checks,
-and Ethos-U performance-related reporting based on the Vela toolchain.
+and Ethos-U standardized performance results based on the Vela toolchain.
 
 ### Corstone
 
@@ -101,8 +101,9 @@ Direct `.pt2` support depends on `mlia-converters-pytorch`, and the current
 Corstone ExecuTorch path is only available for selected target and backend
 combinations.
 
-The package depends on `mlia>=0.11.0.dev36` and is intended to be used as part
-of a wider MLIA installation rather than as a standalone CLI.
+The required core MLIA version is defined in [`pyproject.toml`](pyproject.toml).
+This package is intended to be used as part of a wider MLIA installation rather
+than as a standalone CLI.
 
 ## Reporting bugs
 
@@ -158,8 +159,8 @@ uv build
 
 ## Project layout
 
-- `src/mlia/target/ethos_u/`: target integration, advisor logic, reporting, and
-  analysis pipeline for Ethos-U.
+- `src/mlia/target/ethos_u/`: target integration, advisor logic, result-owned
+  advice, and standardized-output collection for Ethos-U.
 - `src/mlia/backend/vela/`: Vela backend integration.
 - `src/mlia/backend/corstone/`: Corstone backend integration.
 - `src/mlia/resources/target_profiles/`: bundled Ethos-U target profiles.
