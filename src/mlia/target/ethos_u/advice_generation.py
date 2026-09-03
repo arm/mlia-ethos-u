@@ -218,14 +218,7 @@ class EthosUAdviceProducer(FactBasedAdviceProducer):
             f"{data_item.recommendation}"
         )
 
-        affected_entity_ids = [
-            (
-                layer_location
-                if layer_location.startswith("source_operator/")
-                else f"source_operator/{layer_location}"
-            )
-            for layer_location in data_item.affected_layer_locations
-        ]
+        affected_entity_ids = list(data_item.affected_layer_locations)
 
         self.add_advice(
             message=message,

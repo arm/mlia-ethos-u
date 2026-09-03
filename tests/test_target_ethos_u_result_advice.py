@@ -10,6 +10,7 @@ import pytest
 from mlia.backend.vela.compat import (
     NpuSupported,
     Operator,
+    OperatorIdentity,
     Operators,
     VelaCompatibilityResult,
 )
@@ -30,6 +31,7 @@ def test_compatibility_advice_is_attached_to_its_result() -> None:
                     supported=False,
                     reasons=[("Unsupported operator", "CUSTOM")],
                 ),
+                identity=OperatorIdentity.tflite(0, 0),
             )
         ]
     )

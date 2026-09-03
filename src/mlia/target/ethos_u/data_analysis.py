@@ -234,7 +234,7 @@ class EthosUDataAnalyzer(FactExtractor):
                     operator = ops[idx]
                     lut_fact = EthosULayerSuboptimalActivation(
                         operator_name=operator.name,
-                        location=f"operator/{idx}",
+                        location=operator.identity.entity_id,
                         operator_type=operator.op_type,
                         is_supported=operator.run_on_npu.supported,
                         reasons=operator.run_on_npu.reasons,
@@ -250,7 +250,7 @@ class EthosUDataAnalyzer(FactExtractor):
     @analyze_data.register
     def analyze_operator_compatibility(self, operators: Operators) -> None:
         """Analyse operator compatibility information."""
-        for idx, operator in enumerate(operators.ops):
+        for operator in operators.ops:
             # Determine NPU placement
             if operator.cpu_only:
                 npu_placement = "cpu"
@@ -262,7 +262,7 @@ class EthosUDataAnalyzer(FactExtractor):
             # Create layer compatibility fact
             layer_fact = EthosULayerCompatibilityIssue(
                 operator_name=operator.name,
-                location=f"operator/{idx}",
+                location=operator.identity.entity_id,
                 operator_type=operator.op_type,
                 is_supported=operator.run_on_npu.supported,
                 reasons=operator.run_on_npu.reasons,

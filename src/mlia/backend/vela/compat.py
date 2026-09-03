@@ -6,9 +6,9 @@ from __future__ import annotations
 
 import itertools
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 import mlia
 import mlia.core.output_schema as schema
@@ -88,6 +88,9 @@ _VELA_LAYERWISE_CSV_GLOB_PATTERN = "*{model_name}*per-layer.csv"
 # TFLite operator names to filter from layerwise data
 _TFLITE_LAYERWISE_FILTERED_OP_NAMES = ["Placeholder", "Const"]
 
+_ENTITY_KIND_PERFORMANCE_LAYER = "performance_layer"
+_ENTITY_KIND_COMPILED_OPERATOR = "compiled_operator"
+
 
 def _get_layerwise_csv_pattern(model_name: str) -> str:
     """Format the layerwise CSV glob pattern for a model.
@@ -109,6 +112,70 @@ class NpuSupported:
     reasons: list[tuple[str, str]]
 
 
+@dataclass(frozen=True)
+class OperatorIdentity:
+    """Result-local identity for a checked operator."""
+
+    entity_id: str
+    entity_kind: str
+    attributes: dict[str, Any] = field(default_factory=dict)
+
+    @staticmethod
+    def _validate_index(index: int, description: str) -> None:
+        """Validate an identity coordinate."""
+        if type(index) is not int or index < 0:  # pylint: disable=unidiomatic-typecheck
+            raise ValueError(f"{description} must be a non-negative integer.")
+
+    @classmethod
+    def tflite(cls, subgraph_index: int, operator_index: int) -> OperatorIdentity:
+        """Create a canonical identity for a source TFLite operator."""
+        return cls(
+            entity_id=schema.tflite_source_operator_id(operator_index, subgraph_index),
+            entity_kind=schema.ENTITY_KIND_SOURCE_OPERATOR,
+            attributes={
+                "subgraph_index": subgraph_index,
+                "operator_index": operator_index,
+            },
+        )
+
+    @classmethod
+    def performance_layer(cls, layer_index: int) -> OperatorIdentity:
+        """Create an identity scoped to a Vela per-layer performance row."""
+        cls._validate_index(layer_index, "Vela performance layer index")
+        return cls(
+            entity_id=f"{_ENTITY_KIND_PERFORMANCE_LAYER}/{layer_index}",
+            entity_kind=_ENTITY_KIND_PERFORMANCE_LAYER,
+            attributes={
+                "identity_scope": "vela_per_layer_csv",
+                "layer_index": layer_index,
+            },
+        )
+
+    @classmethod
+    def compiled_tflite(
+        cls, subgraph_index: int, operator_index: int
+    ) -> OperatorIdentity:
+        """Create an identity scoped to a Vela-generated TFLite artifact."""
+        cls._validate_index(subgraph_index, "Compiled TFLite subgraph index")
+        cls._validate_index(operator_index, "Compiled TFLite operator index")
+        if subgraph_index == 0:
+            entity_id = f"{_ENTITY_KIND_COMPILED_OPERATOR}/operator/{operator_index}"
+        else:
+            entity_id = (
+                f"{_ENTITY_KIND_COMPILED_OPERATOR}/subgraph/{subgraph_index}"
+                f"/operator/{operator_index}"
+            )
+        return cls(
+            entity_id=entity_id,
+            entity_kind=_ENTITY_KIND_COMPILED_OPERATOR,
+            attributes={
+                "identity_scope": "vela_compiled_tflite",
+                "subgraph_index": subgraph_index,
+                "operator_index": operator_index,
+            },
+        )
+
+
 @dataclass
 class Operator:
     """Model operator."""
@@ -116,6 +183,7 @@ class Operator:
     name: str
     op_type: str
     run_on_npu: NpuSupported
+    identity: OperatorIdentity
 
     @property
     def cpu_only(self) -> bool:
@@ -262,13 +330,13 @@ class Operators:
         checks: list[schema.Check] = []
         entities: list[schema.Entity] = []
 
-        for idx, operator in enumerate(self.ops):
-            entity_id = f"source_operator/operator/{idx}"
+        for operator in self.ops:
+            entity_id = operator.identity.entity_id
 
             # Create entity for this operator
             entity = schema.Entity(
                 id=entity_id,
-                kind=schema.ENTITY_KIND_SOURCE_OPERATOR,
+                kind=operator.identity.entity_kind,
                 name=operator.name,
                 placement=(
                     schema.PlacementType.NPU.value
@@ -277,7 +345,7 @@ class Operators:
                 ),
                 attributes={
                     "op_type": operator.op_type,
-                    "index": idx,
+                    **operator.identity.attributes,
                 },
             )
             entities.append(entity)
@@ -312,6 +380,13 @@ class Operators:
             result_status = schema.ResultStatus.INCOMPATIBLE
 
         # Create result
+        custom_entity_kinds = sorted(
+            {
+                operator.identity.entity_kind
+                for operator in self.ops
+                if operator.identity.entity_kind != schema.ENTITY_KIND_SOURCE_OPERATOR
+            }
+        )
         result = schema.Result(
             kind=schema.ResultKind.COMPATIBILITY,
             status=result_status,
@@ -321,6 +396,9 @@ class Operators:
             metrics=self._accelerator_operator_percentage_metrics(),
             checks=checks,
             entities=entities,
+            entity_kinds=[
+                schema.EntityKind(id=entity_kind) for entity_kind in custom_entity_kinds
+            ],
         )
 
         return schema.StandardizedOutput(
@@ -345,27 +423,42 @@ class VelaCompatibilityResult:
     standardized_output: dict[str, Any] | None = None
 
 
-def _supported_pytorch_operators(
+def _operators_from_graph(
+    graph: Any,
+    vela_internal_ops: tuple,
+    deps: VelaDeps,
+    identity_factory: Callable[[int, int], OperatorIdentity],
+) -> Operators:
+    """Extract checked operators while preserving graph-local coordinates."""
+    operators = []
+    for subgraph_index, subgraph in enumerate(graph.subgraphs):
+        for op in subgraph.get_all_ops():
+            if op.type in vela_internal_ops:
+                continue
+            operators.append(
+                Operator(
+                    name=op.name,
+                    op_type=deps.optype_to_builtintype(op.type),
+                    run_on_npu=_run_on_npu(op, deps),
+                    identity=identity_factory(subgraph_index, op.op_index),
+                )
+            )
+    return Operators(operators)
+
+
+def _supported_compiled_model_operators(
     model_path: Path,
     compiler_options: Any,
     vela_compiler: VelaCompiler,
     vela_internal_ops: tuple,
     deps: VelaDeps,
 ) -> Operators:
-    """Extract operators from PyTorch/TOSA models via layerwise CSV.
+    """Extract PyTorch/TOSA-derived operators without claiming TFLite identity.
 
-    For PyTorch and TOSA files, we need to compile first and extract operators
-    from the layerwise CSV, since direct model reading after compilation shows
-    only fused ops.
-
-    Args:
-        model_path: Path to the PyTorch/TOSA model file
-        compiler_options: Vela compiler options
-        vela_compiler: VelaCompiler instance
-        vela_internal_ops: Tuple of internal Vela operations to filter out
-
-    Returns:
-        Operators object containing the model's operators
+    Vela's per-layer CSV does not expose verified source operation coordinates
+    for these input formats, so rows receive result-local performance identities.
+    If the CSV is unavailable, operators read from Vela's generated TFLite
+    artifact receive identities explicitly scoped to that compiled artifact.
     """
     _, compiled_model_path = vela_compiler.compile_model(model_path)
 
@@ -386,17 +479,11 @@ def _supported_pytorch_operators(
             )
             return Operators([])
         graph, _ = vela_compiler._read_model(compiled_model_path)
-        return Operators(
-            [
-                Operator(
-                    op.name,
-                    deps.optype_to_builtintype(op.type),
-                    _run_on_npu(op, deps),
-                )
-                for sg in graph.subgraphs
-                for op in sg.get_all_ops()
-                if op.type not in vela_internal_ops
-            ]
+        return _operators_from_graph(
+            graph,
+            vela_internal_ops,
+            deps,
+            OperatorIdentity.compiled_tflite,
         )
 
     csv_path = csv_paths[0]
@@ -406,9 +493,10 @@ def _supported_pytorch_operators(
 
     operators = [
         Operator(
-            layer.name or f"op_{idx}",
-            layer.tflite_operator,
-            NpuSupported(True, []),
+            name=layer.name or f"op_{idx}",
+            op_type=layer.tflite_operator,
+            run_on_npu=NpuSupported(True, []),
+            identity=OperatorIdentity.performance_layer(idx),
         )
         for idx, layer in enumerate(original_layerwise_info.layerwise_info)
         if layer.tflite_operator
@@ -437,23 +525,17 @@ def supported_operators(model_path: Path, compiler_options: Any) -> Operators:
     vela_compiler = deps.VelaCompiler(compiler_options)
 
     if is_pytorch_file(model_path) or is_tosa_file(model_path):
-        return _supported_pytorch_operators(
+        return _supported_compiled_model_operators(
             model_path, compiler_options, vela_compiler, vela_internal_ops, deps
         )
 
     graph, _ = vela_compiler._read_model(model_path)
 
-    return Operators(
-        [
-            Operator(
-                op.name,
-                deps.optype_to_builtintype(op.type),
-                _run_on_npu(op, deps),
-            )
-            for sg in graph.subgraphs
-            for op in sg.get_all_ops()
-            if op.type not in vela_internal_ops
-        ]
+    return _operators_from_graph(
+        graph,
+        vela_internal_ops,
+        deps,
+        OperatorIdentity.tflite,
     )
 
 

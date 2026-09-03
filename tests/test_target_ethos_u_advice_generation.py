@@ -162,7 +162,10 @@ def assert_advices_match(actual: list[Advice], expected: list[Advice]) -> None:
         pytest.param(
             IneffectiveActivationPattern(
                 affected_layers=["Layer1", "Layer2"],
-                affected_layer_locations=["operator/0", "operator/1"],
+                affected_layer_locations=[
+                    "source_operator/operator/0",
+                    "source_operator/operator/1",
+                ],
                 layer_count=2,
                 activation_types=["MISH", "SELU"],
                 recommendation="Consider replacing them with NPU-friendly alternatives.",

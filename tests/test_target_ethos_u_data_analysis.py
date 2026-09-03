@@ -13,6 +13,7 @@ import pytest
 from mlia.backend.vela.compat import (
     NpuSupported,
     Operator,
+    OperatorIdentity,
     Operators,
     VelaCompatibilityResult,
 )
@@ -74,13 +75,14 @@ def _fact_payload(fact: Fact) -> object:
                         "CPU operator",
                         "CPU operator type",
                         NpuSupported(False, [("CPU only operator", "")]),
+                        OperatorIdentity.tflite(0, 0),
                     )
                 ]
             ),
             [
                 EthosULayerCompatibilityIssue(
                     operator_name="CPU operator",
-                    location="operator/0",
+                    location="source_operator/operator/0",
                     operator_type="CPU operator type",
                     is_supported=False,
                     reasons=[("CPU only operator", "")],
@@ -97,13 +99,14 @@ def _fact_payload(fact: Fact) -> object:
                         "NPU operator",
                         "NPU operator type",
                         NpuSupported(True, []),
+                        OperatorIdentity.tflite(0, 0),
                     )
                 ]
             ),
             [
                 EthosULayerCompatibilityIssue(
                     operator_name="NPU operator",
-                    location="operator/0",
+                    location="source_operator/operator/0",
                     operator_type="NPU operator type",
                     is_supported=True,
                     reasons=[],
@@ -283,6 +286,10 @@ def _make_npu_supported_operator(name: str, op_type: str) -> Operator:
         name=name,
         op_type=op_type,
         run_on_npu=NpuSupported(True, []),
+        identity=OperatorIdentity(
+            entity_id=f"test_operator/{name}",
+            entity_kind="test_operator",
+        ),
     )
 
 
@@ -313,7 +320,7 @@ def test_analyze_activation_function_detects_suboptimal_activation() -> None:
     assert len(suboptimal_facts) == 1
     fact = suboptimal_facts[0]
 
-    assert fact.location == "operator/1"
+    assert fact.location == "test_operator/exp_op"
     assert fact.operator_type == "EXP"
     assert fact.activation_type == "MISH"
     assert fact.is_supported is True

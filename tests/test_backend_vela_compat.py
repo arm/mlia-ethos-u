@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -15,6 +16,7 @@ from mlia.backend.errors import BackendUnavailableError
 from mlia.backend.vela.compat import (
     NpuSupported,
     Operator,
+    OperatorIdentity,
     Operators,
     generate_supported_operators_report,
     get_vela,
@@ -53,7 +55,12 @@ def fail_load_vela_deps() -> None:
 )
 def test_operator(name: str, op_type: str, npu_supported: NpuSupported) -> None:
     """Test Operator class."""
-    operator = Operator(name, op_type, npu_supported)
+    operator = Operator(
+        name,
+        op_type,
+        npu_supported,
+        OperatorIdentity.tflite(subgraph_index=0, operator_index=0),
+    )
     cpu_only = not npu_supported.supported and npu_supported.reasons == [
         ("CPU only operator", "")
     ]
@@ -69,17 +76,20 @@ def test_operator(name: str, op_type: str, npu_supported: NpuSupported) -> None:
                 "sequential/conv2/Conv2D;sequential/conv1/Conv2D",
                 op_type="CONV_2D",
                 run_on_npu=NpuSupported(supported=True, reasons=[]),
+                identity=OperatorIdentity.tflite(0, 0),
             ),
             Operator(
                 name="sequential/conv2/Relu;sequential/conv2/BiasAdd;"
                 "sequential/conv2/Conv2D",
                 op_type="CONV_2D",
                 run_on_npu=NpuSupported(supported=True, reasons=[]),
+                identity=OperatorIdentity.tflite(0, 1),
             ),
             Operator(
                 name="sequential/max_pooling2d/MaxPool",
                 op_type="MAX_POOL_2D",
                 run_on_npu=NpuSupported(supported=False, reasons=[]),
+                identity=OperatorIdentity.tflite(0, 2),
             ),
         ],
         [],
@@ -113,27 +123,32 @@ def test_operators(ops: list[Operator]) -> None:
                         "sequential/conv2/Conv2D;sequential/conv1/Conv2D",
                         op_type="CONV_2D",
                         run_on_npu=NpuSupported(supported=True, reasons=[]),
+                        identity=OperatorIdentity.tflite(0, 0),
                     ),
                     Operator(
                         name="sequential/conv2/Relu;sequential/conv2/BiasAdd;"
                         "sequential/conv2/Conv2D",
                         op_type="CONV_2D",
                         run_on_npu=NpuSupported(supported=True, reasons=[]),
+                        identity=OperatorIdentity.tflite(0, 1),
                     ),
                     Operator(
                         name="sequential/max_pooling2d/MaxPool",
                         op_type="MAX_POOL_2D",
                         run_on_npu=NpuSupported(supported=True, reasons=[]),
+                        identity=OperatorIdentity.tflite(0, 2),
                     ),
                     Operator(
                         name="sequential/flatten/Reshape",
                         op_type="RESHAPE",
                         run_on_npu=NpuSupported(supported=True, reasons=[]),
+                        identity=OperatorIdentity.tflite(0, 3),
                     ),
                     Operator(
                         name="Identity",
                         op_type="FULLY_CONNECTED",
                         run_on_npu=NpuSupported(supported=True, reasons=[]),
+                        identity=OperatorIdentity.tflite(0, 4),
                     ),
                 ]
             ),
@@ -154,6 +169,7 @@ def test_supported_operators(
         for expected, actual in zip(expected_ops.ops, operators.ops):
             # do not compare names as they could be different on each model generation
             assert expected.op_type == actual.op_type
+            assert expected.identity == actual.identity
             assert isinstance(actual.run_on_npu.supported, bool)
             if actual.run_on_npu.supported:
                 assert actual.run_on_npu.reasons == []
@@ -162,6 +178,182 @@ def test_supported_operators(
     except BackendUnavailableError:
         # If Vela is not available, the test should pass (expected behavior)
         pytest.skip("Vela backend not available, skipping operators test")
+
+
+def test_supported_operators_preserves_tflite_subgraph_and_op_indexes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Direct TFLite identities should use Vela's original graph coordinates."""
+    placeholder_type = object()
+    subgraph_input_type = object()
+    const_type = object()
+    checked_type = object()
+    main_op = SimpleNamespace(name="main", type=checked_type, op_index=7)
+    nested_op = SimpleNamespace(name="nested", type=checked_type, op_index=7)
+    nested_other_op = SimpleNamespace(
+        name="nested_other", type=checked_type, op_index=2
+    )
+    graph = SimpleNamespace(
+        subgraphs=[
+            SimpleNamespace(
+                get_all_ops=MagicMock(
+                    return_value=[
+                        SimpleNamespace(
+                            name="input", type=placeholder_type, op_index=None
+                        ),
+                        main_op,
+                    ]
+                )
+            ),
+            SimpleNamespace(
+                get_all_ops=MagicMock(return_value=[nested_op, nested_other_op])
+            ),
+        ]
+    )
+    compiler = MagicMock()
+    compiler._read_model.return_value = (graph, None)
+    deps = SimpleNamespace(
+        ethosu_vela_version="test",
+        Op=SimpleNamespace(
+            Placeholder=placeholder_type,
+            SubgraphInput=subgraph_input_type,
+            Const=const_type,
+        ),
+        VelaCompiler=MagicMock(return_value=compiler),
+        optype_to_builtintype=MagicMock(return_value="CONV_2D"),
+    )
+    monkeypatch.setattr(vela_compat, "_get_vela_deps", MagicMock(return_value=deps))
+    monkeypatch.setattr(
+        vela_compat,
+        "_run_on_npu",
+        MagicMock(return_value=NpuSupported(supported=True, reasons=[])),
+    )
+    model_file = tmp_path / "model.tflite"
+    model_file.write_bytes(b"test model content")
+
+    operators = supported_operators(model_file, compiler_options=object())
+
+    assert [operator.identity.entity_id for operator in operators.ops] == [
+        "source_operator/operator/7",
+        "source_operator/subgraph/1/operator/7",
+        "source_operator/subgraph/1/operator/2",
+    ]
+    output = operators.to_standardized_output(model_path=model_file)
+    result = output["results"][0]
+    assert [entity["id"] for entity in result["entities"]] == [
+        "source_operator/operator/7",
+        "source_operator/subgraph/1/operator/7",
+        "source_operator/subgraph/1/operator/2",
+    ]
+    assert [check["entity_id"] for check in result["checks"]] == [
+        "source_operator/operator/7",
+        "source_operator/subgraph/1/operator/7",
+        "source_operator/subgraph/1/operator/2",
+    ]
+    assert result.get("entity_kinds", []) == []
+
+
+@pytest.mark.parametrize("model_suffix", [".pt2", ".tosa"])
+def test_compiled_source_formats_use_performance_layer_identity(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, model_suffix: str
+) -> None:
+    """CSV-derived rows must not claim TFLite source-operator identity."""
+    model_file = tmp_path / f"model{model_suffix}"
+    model_file.write_bytes(b"test model content")
+    (tmp_path / "model_per-layer.csv").write_text("unused", encoding="utf-8")
+    compiler = MagicMock()
+    compiler.compile_model.return_value = (None, tmp_path / "compiled.tflite")
+    deps = SimpleNamespace(
+        ethosu_vela_version="test",
+        parse_layerwise_perf_csv=MagicMock(
+            return_value=SimpleNamespace(
+                layerwise_info=[
+                    SimpleNamespace(name="constant", tflite_operator="Const"),
+                    SimpleNamespace(name="layer", tflite_operator="CONV_2D"),
+                ]
+            )
+        ),
+        layer_metrics=[],
+    )
+    monkeypatch.setattr(vela_compat, "_get_vela_deps", MagicMock(return_value=deps))
+    compiler_options = SimpleNamespace(output_dir=tmp_path)
+
+    operators = vela_compat._supported_compiled_model_operators(
+        model_file,
+        compiler_options,
+        compiler,
+        vela_internal_ops=(),
+        deps=deps,
+    )
+
+    assert [operator.identity for operator in operators.ops] == [
+        OperatorIdentity.performance_layer(1)
+    ]
+    output = operators.to_standardized_output(model_path=model_file)
+    result = output["results"][0]
+    assert result["entities"] == [
+        {
+            "id": "performance_layer/1",
+            "kind": "performance_layer",
+            "name": "layer",
+            "placement": "NPU",
+            "attributes": {
+                "op_type": "CONV_2D",
+                "identity_scope": "vela_per_layer_csv",
+                "layer_index": 1,
+            },
+        }
+    ]
+    assert result["entity_kinds"] == [{"id": "performance_layer"}]
+
+
+def test_compiled_model_fallback_uses_compiled_artifact_identity(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Fallback graph reads should remain scoped to the compiled artifact."""
+    checked_type = object()
+    compiler = MagicMock()
+    compiler.compile_model.return_value = (None, tmp_path / "compiled.tflite")
+    compiler._read_model.return_value = (
+        SimpleNamespace(
+            subgraphs=[
+                SimpleNamespace(get_all_ops=MagicMock(return_value=[])),
+                SimpleNamespace(
+                    get_all_ops=MagicMock(
+                        return_value=[
+                            SimpleNamespace(
+                                name="compiled", type=checked_type, op_index=5
+                            )
+                        ]
+                    )
+                ),
+            ]
+        ),
+        None,
+    )
+    deps = SimpleNamespace(
+        optype_to_builtintype=MagicMock(return_value="CONV_2D"),
+    )
+    monkeypatch.setattr(
+        vela_compat,
+        "_run_on_npu",
+        MagicMock(return_value=NpuSupported(supported=True, reasons=[])),
+    )
+    model_file = tmp_path / "model.pt2"
+    model_file.write_bytes(b"test model content")
+
+    operators = vela_compat._supported_compiled_model_operators(
+        model_file,
+        SimpleNamespace(output_dir=tmp_path),
+        compiler,
+        vela_internal_ops=(),
+        deps=deps,
+    )
+
+    assert [operator.identity for operator in operators.ops] == [
+        OperatorIdentity.compiled_tflite(1, 5)
+    ]
+    assert not operators.ops[0].identity.entity_id.startswith("source_operator/")
 
 
 def test_generate_supported_operators_report(tmp_path: Path) -> None:
@@ -235,6 +427,7 @@ def test_operators_to_standardized_output(tmp_path: Path) -> None:
             name="conv1",
             op_type="CONV_2D",
             run_on_npu=NpuSupported(supported=True, reasons=[]),
+            identity=OperatorIdentity.tflite(0, 0),
         ),
         Operator(
             name="conv2",
@@ -242,6 +435,7 @@ def test_operators_to_standardized_output(tmp_path: Path) -> None:
             run_on_npu=NpuSupported(
                 supported=False, reasons=[("CPU only operator", "")]
             ),
+            identity=OperatorIdentity.tflite(0, 1),
         ),
         Operator(
             name="pool1",
@@ -250,6 +444,7 @@ def test_operators_to_standardized_output(tmp_path: Path) -> None:
                 supported=False,
                 reasons=[("Constraint failed", "Invalid tensor shape")],
             ),
+            identity=OperatorIdentity.tflite(0, 2),
         ),
     ]
 
@@ -304,6 +499,11 @@ def test_operators_to_standardized_output(tmp_path: Path) -> None:
     assert entities[0]["name"] == "conv1"
     assert entities[0]["kind"] == "source_operator"
     assert entities[0]["placement"] == "NPU"
+    assert entities[0]["attributes"] == {
+        "op_type": "CONV_2D",
+        "subgraph_index": 0,
+        "operator_index": 0,
+    }
     assert checks[0]["status"] == "pass"
     assert checks[0]["entity_id"] == entities[0]["id"]
 
@@ -333,11 +533,13 @@ def test_operators_to_standardized_output_all_supported(tmp_path: Path) -> None:
             name="conv1",
             op_type="CONV_2D",
             run_on_npu=NpuSupported(supported=True, reasons=[]),
+            identity=OperatorIdentity.tflite(0, 0),
         ),
         Operator(
             name="conv2",
             op_type="CONV_2D",
             run_on_npu=NpuSupported(supported=True, reasons=[]),
+            identity=OperatorIdentity.tflite(0, 1),
         ),
     ]
 
