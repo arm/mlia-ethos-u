@@ -507,8 +507,15 @@ class CorstonePerformanceMetrics:
 
         # Extract target info from config
         target_type = target_config.get("target_type", backend_name)
-        profile_name = target_config.get("profile_name", target_type)
         mac_config = target_config.get("mac", "unknown")
+        profile_name = target_config.get("profile_name")
+        if profile_name is None:
+            profile_target = target_config.get("target", target_type)
+            profile_name = (
+                f"{profile_target}-{mac_config}"
+                if mac_config != "unknown"
+                else profile_target
+            )
 
         # Create target components - only NPU
         components = []

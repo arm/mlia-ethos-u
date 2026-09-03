@@ -9,7 +9,7 @@ import logging
 from dataclasses import dataclass
 from functools import singledispatchmethod
 
-from mlia.backend.vela.compat import Operators, VelaCompatibilityResult
+from mlia.backend.vela.compat import Operators
 from mlia.core.common import DataItem
 from mlia.core.data_analysis import (
     Fact,
@@ -205,14 +205,6 @@ class EthosUDataAnalyzer(FactExtractor):
             data_item.__class__.__name__,
         )
 
-    @analyze_data.register
-    def analyze_vela_compatibility(self, vela_result: VelaCompatibilityResult) -> None:
-        """Analyze Vela compatibility result and extract operator information."""
-        # Extract the Operators object from VelaCompatibilityResult
-        self.analyze_operator_compatibility(vela_result.legacy_info)
-        # Analyze activation usage patterns
-        self._analyze_activation_function(vela_result.legacy_info)
-
     def _sequence_matches(self, ops: list, idx: int, function_ops: list[str]) -> bool:
         """Check operators sequence matches activation function operator pattern."""
         if idx + len(function_ops) > len(ops):
@@ -250,6 +242,7 @@ class EthosUDataAnalyzer(FactExtractor):
     @analyze_data.register
     def analyze_operator_compatibility(self, operators: Operators) -> None:
         """Analyse operator compatibility information."""
+        self._analyze_activation_function(operators)
         for operator in operators.ops:
             # Determine NPU placement
             if operator.cpu_only:
@@ -410,12 +403,19 @@ class EthosUDataAnalyzer(FactExtractor):
         }
         resolved = []
         for breakdown in result.get("breakdowns", []):
-            entity = entities_by_id.get(breakdown.get("entity_id"), {})
+            entity_id = breakdown.get("entity_id", "")
+            entity = entities_by_id.get(entity_id)
+            if entity is None:
+                logger.debug(
+                    "Ignoring performance breakdown for unknown entity: %s",
+                    entity_id,
+                )
+                continue
             resolved.append(
                 {
                     **breakdown,
-                    "name": entity.get("name", breakdown.get("entity_id", "")),
-                    "entity_id": breakdown.get("entity_id", ""),
+                    "name": entity.get("name", entity_id),
+                    "entity_id": entity_id,
                 }
             )
         return resolved
@@ -439,6 +439,7 @@ class EthosUDataAnalyzer(FactExtractor):
         return None
 
     METRIC_ALIASES = {
+        "network_share": ["network_share", "network_cycles", "network"],
         "op_cycles": ["op_cycles"],
         "npu_cycles": ["npu_cycles", "npu"],
         "sram_cycles": ["sram_access_cycles", "sram_ac"],
@@ -460,12 +461,9 @@ class EthosUDataAnalyzer(FactExtractor):
         # Collect (network_share_pct, layer) pairs for easy sorting
         layers_scored = []
         for layer in breakdowns:
-            try:
-                network_metric = 3
-                network_pct = float(layer["metrics"][network_metric]["value"])
-                layers_scored.append((network_pct, layer))
-            except (KeyError, IndexError, TypeError, ValueError):
-                continue
+            metric = self.get_metric_tup(layer, self.METRIC_ALIASES["network_share"])
+            if metric is not None:
+                layers_scored.append((metric[1], layer))
 
         if not layers_scored:
             return

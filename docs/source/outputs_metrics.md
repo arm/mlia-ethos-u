@@ -35,8 +35,10 @@ you return to when something needs explanation.
 
 ## Example JSON shape
 
-Metrics are represented as objects in a list. Per-operator and per-layer metrics
-are stored in breakdowns linked to result-local entities:
+The following abridged fragment focuses on result data and omits the required
+standardized-output envelope. Metrics are represented as objects in a list.
+Per-operator and per-layer metrics are stored in breakdowns linked to
+result-local entities:
 
 ```json
 {

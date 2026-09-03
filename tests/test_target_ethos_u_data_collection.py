@@ -7,13 +7,18 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from mlia.backend.corstone.performance import CorstonePerformanceMetrics as CorstonePerf
+from mlia.backend.corstone.performance import (
+    CorstoneModelPerformanceMetrics,
+    CorstonePerformanceMetrics as CorstonePerf,
+)
 from mlia.backend.errors import BackendUnavailableError
 from mlia.backend.vela.compat import Operators, VelaCompatibilityResult
 from mlia.backend.vela.performance import LayerwisePerfInfo
 from mlia.backend.vela.performance import PerformanceMetrics as VelaPerf
+from mlia.core.common import AdviceCategory
 from mlia.core.context import Context, ExecutionContext
 from mlia.core.data_collection import DataCollector
+from mlia.core.output_validation import validate_standardized_output
 from mlia.core.errors import ConfigurationError
 from mlia.core.errors import FunctionalityNotSupportedError
 from mlia.target.ethos_u.optimization_shims import OptimizationSettings
@@ -32,9 +37,17 @@ from mlia.target.ethos_u.performance import (
     CorstonePerformanceResult,
     MemoryUsage,
     NPUCycles,
-    OptimizationPerformanceMetrics,
+    OptimizationPerformanceResult,
     PerformanceMetrics,
     VelaPerformanceResult,
+)
+from mlia.target.ethos_u.utils.tflite_shims import (
+    ModelConfiguration,
+    TFLiteCompatibilityInfo,
+    TFLiteCompatibilityResult,
+    TFLiteCompatibilityStatus,
+    TFLiteConversionError,
+    TFLiteConversionErrorCode,
 )
 
 
@@ -77,6 +90,22 @@ def setup_optimization(optimizations: list) -> Context:
     return context
 
 
+def mock_corstone_backend_configuration(
+    monkeypatch: pytest.MonkeyPatch, profile: str = "default"
+) -> MagicMock:
+    """Mock the effective Corstone backend configuration."""
+    backend_repository = MagicMock()
+    backend_repository.get_backend_settings.return_value = (
+        Path("backend"),
+        {"profile": profile},
+    )
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.data_collection.get_backend_repository",
+        MagicMock(return_value=backend_repository),
+    )
+    return backend_repository
+
+
 def test_operator_compatibility_collector(
     sample_context: Context, test_tflite_model: Path
 ) -> None:
@@ -88,14 +117,187 @@ def test_operator_compatibility_collector(
 
     try:
         result = collector.collect_data()
-        # Should return VelaCompatibilityResult wrapper with standardized output
         assert isinstance(result, VelaCompatibilityResult)
-        assert result.legacy_info is not None
-        assert isinstance(result.legacy_info, Operators)
-        assert result.standardized_output is not None
+        validate_standardized_output(result.standardized_output)
+        assert set(vars(result)) == {"standardized_output"}
     except BackendUnavailableError:
         # If Vela is not available, the test should pass (expected behavior)
         pytest.skip("Vela backend not available, skipping operator compatibility test")
+
+
+@pytest.mark.parametrize(
+    "compatibility, expected_status",
+    [
+        (
+            TFLiteCompatibilityInfo(
+                status=TFLiteCompatibilityStatus.TFLITE_CONVERSION_ERROR,
+                conversion_errors=[
+                    TFLiteConversionError(
+                        "custom operator",
+                        TFLiteConversionErrorCode.NEEDS_CUSTOM_OPS,
+                        "CustomOp",
+                        ["model"],
+                    )
+                ],
+            ),
+            "incompatible",
+        ),
+        (
+            TFLiteCompatibilityInfo(
+                status=TFLiteCompatibilityStatus.MODEL_WITH_CUSTOM_OP_ERROR
+            ),
+            "incompatible",
+        ),
+        (
+            TFLiteCompatibilityInfo(
+                status=TFLiteCompatibilityStatus.UNKNOWN_ERROR,
+                conversion_exception=RuntimeError("conversion failed"),
+            ),
+            "failed",
+        ),
+    ],
+)
+def test_legacy_tflite_failure_returns_complete_result(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    compatibility: TFLiteCompatibilityInfo,
+    expected_status: str,
+) -> None:
+    """A failed TensorFlow Lite precheck should still return canonical output."""
+    model_path = tmp_path / "model.h5"
+    model_path.write_bytes(b"keras model")
+    target = EthosUConfiguration.load_profile("ethos-u55-256")
+    checker = MagicMock()
+    checker.check_compatibility.return_value = compatibility
+    supported_operators_mock = MagicMock()
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.data_collection.is_legacy_model",
+        MagicMock(return_value=True),
+    )
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.data_collection.LegacyChecker",
+        MagicMock(return_value=checker),
+    )
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.data_collection.supported_operators",
+        supported_operators_mock,
+    )
+    context = ExecutionContext(
+        advice_category={AdviceCategory.COMPATIBILITY},
+        output_dir=tmp_path,
+    )
+    collector = EthosUOperatorCompatibility(model_path, target)
+    collector.set_context(context)
+
+    result = collector.collect_data()
+
+    assert isinstance(result, TFLiteCompatibilityResult)
+    assert set(vars(result)) == {"standardized_output"}
+    validate_standardized_output(result.standardized_output)
+    canonical_result = result.standardized_output["results"][0]
+    assert canonical_result["kind"] == "compatibility"
+    assert canonical_result["status"] == expected_status
+    assert canonical_result["checks"][0]["status"] == "fail"
+    assert canonical_result["metrics"][0]["availability"] == "unavailable"
+    assert canonical_result["advice"]
+    assert {item["category"] for item in canonical_result["advice"]} == {
+        "compatibility"
+    }
+    supported_operators_mock.assert_not_called()
+
+
+def test_legacy_tflite_failure_supports_saved_model_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """SavedModel conversion failures should include deterministic model metadata."""
+    model_path = tmp_path / "saved_model"
+    (model_path / "variables").mkdir(parents=True)
+    (model_path / "saved_model.pb").write_bytes(b"model")
+    (model_path / "variables" / "variables.data").write_bytes(b"weights")
+    compatibility = TFLiteCompatibilityInfo(
+        status=TFLiteCompatibilityStatus.UNKNOWN_ERROR,
+        conversion_exception=RuntimeError("conversion failed"),
+    )
+    checker = MagicMock()
+    checker.check_compatibility.return_value = compatibility
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.data_collection.is_legacy_model",
+        MagicMock(return_value=True),
+    )
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.data_collection.LegacyChecker",
+        MagicMock(return_value=checker),
+    )
+    target = EthosUConfiguration.load_profile("ethos-u55-256")
+    context = ExecutionContext(
+        advice_category={AdviceCategory.COMPATIBILITY}, output_dir=tmp_path
+    )
+    collector = EthosUOperatorCompatibility(model_path, target)
+    collector.set_context(context)
+
+    result = collector.collect_data()
+
+    assert isinstance(result, TFLiteCompatibilityResult)
+    validate_standardized_output(result.standardized_output)
+    model = result.standardized_output["model"]
+    assert model["format"] == "saved_model"
+    assert len(model["hash"]) == 64
+    assert model["size_bytes"] == 12
+
+
+def test_legacy_compatibility_uses_converted_artifact_and_original_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    sample_context: Context,
+    tmp_path: Path,
+) -> None:
+    """Identify the submitted model while checking its converted TFLite artifact."""
+    saved_model = tmp_path / "saved_model"
+    (saved_model / "variables").mkdir(parents=True)
+    (saved_model / "saved_model.pb").write_bytes(b"model")
+    (saved_model / "variables" / "variables.data").write_bytes(b"weights")
+    converted_model = tmp_path / "converted.tflite"
+    converted_model.write_bytes(b"converted model")
+    model_configuration = MagicMock(spec=ModelConfiguration)
+    model_configuration.model_path = str(converted_model)
+    checker = MagicMock()
+    checker.check_compatibility.return_value.compatible = True
+    operators = MagicMock(spec=Operators)
+    operators.to_standardized_output.return_value = {
+        "model": {"name": converted_model.name}
+    }
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.data_collection.is_legacy_model",
+        MagicMock(return_value=True),
+    )
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.data_collection.LegacyChecker",
+        MagicMock(return_value=checker),
+    )
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.data_collection.get_tflite_model",
+        MagicMock(return_value=model_configuration),
+    )
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.data_collection.supported_operators",
+        MagicMock(return_value=operators),
+    )
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.data_collection.attach_result_advice", MagicMock()
+    )
+    target = EthosUConfiguration.load_profile("ethos-u55-256")
+    collector = EthosUOperatorCompatibility(saved_model, target)
+    collector.set_context(sample_context)
+
+    result = collector.collect_data()
+
+    assert isinstance(result, VelaCompatibilityResult)
+    assert (
+        operators.to_standardized_output.call_args.kwargs["model_path"]
+        == converted_model
+    )
+    assert result.standardized_output["model"]["name"] == "saved_model"
+    assert result.standardized_output["model"]["format"] == "saved_model"
+    assert result.standardized_output["model"]["size_bytes"] == 12
 
 
 def test_performance_collector(
@@ -110,8 +312,10 @@ def test_performance_collector(
     collector.set_context(sample_context)
 
     result = collector.collect_data()
-    # Without backends specified, collector returns PerformanceMetrics
-    assert isinstance(result, PerformanceMetrics)
+
+    assert isinstance(result, VelaPerformanceResult)
+    assert set(vars(result)) == {"standardized_output"}
+    validate_standardized_output(result.standardized_output)
 
 
 def test_performance_collector_with_vela(
@@ -121,6 +325,10 @@ def test_performance_collector_with_vela(
     target = EthosUConfiguration.load_profile("ethos-u55-256")
 
     mock_performance_estimation_with_vela(monkeypatch, target)
+    attach_advice = MagicMock()
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.data_collection.attach_result_advice", attach_advice
+    )
 
     collector = EthosUPerformance(test_tflite_model, target, backends=["vela"])
     collector.set_context(sample_context)
@@ -128,8 +336,11 @@ def test_performance_collector_with_vela(
     result = collector.collect_data()
     # With only Vela backend, collector returns VelaPerformanceResult
     assert isinstance(result, VelaPerformanceResult)
-    assert result.standardized_output is not None
+    assert set(vars(result)) == {"standardized_output"}
     assert isinstance(result.standardized_output, dict)
+    attach_advice.assert_called_once_with(
+        result.standardized_output, result, sample_context
+    )
 
 
 def test_performance_collector_with_corstone(
@@ -138,7 +349,9 @@ def test_performance_collector_with_corstone(
     """Test performance data collector with Corstone backend."""
     target = EthosUConfiguration.load_profile("ethos-u55-256")
 
-    mock_performance_estimation_with_corstone(monkeypatch, target)
+    serializer = mock_performance_estimation_with_corstone(
+        monkeypatch, target, profile="AVH"
+    )
 
     collector = EthosUPerformance(test_tflite_model, target, backends=["corstone-310"])
     collector.set_context(sample_context)
@@ -146,8 +359,14 @@ def test_performance_collector_with_corstone(
     result = collector.collect_data()
     # With only Corstone backend, collector returns CorstonePerformanceResult
     assert isinstance(result, CorstonePerformanceResult)
-    assert result.standardized_output is not None
+    assert set(vars(result)) == {"standardized_output"}
     assert isinstance(result.standardized_output, dict)
+    assert serializer.call_args.kwargs["backend_config"] == {
+        "fvp": "corstone-310",
+        "target": "ethos-u55",
+        "mac": 256,
+        "profile": "AVH",
+    }
 
 
 def test_performance_collector_with_both_backends(
@@ -166,12 +385,241 @@ def test_performance_collector_with_both_backends(
     result = collector.collect_data()
     # With both backends, collector returns CombinedPerformanceResult
     assert isinstance(result, CombinedPerformanceResult)
-    assert result.standardized_output is not None
+    assert set(vars(result)) == {"standardized_output"}
     assert isinstance(result.standardized_output, dict)
     # Check that both backends are present
     assert len(result.standardized_output["backends"]) == 2
     # Check that both results are present
     assert len(result.standardized_output["results"]) == 2
+
+
+def test_performance_collector_rejects_multiple_corstone_backends(
+    monkeypatch: pytest.MonkeyPatch,
+    sample_context: Context,
+    test_tflite_model: Path,
+) -> None:
+    """Reject configurations the single Corstone metrics slot cannot represent."""
+    target = EthosUConfiguration.load_profile("ethos-u55-256")
+    estimator = MagicMock()
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.data_collection.EthosUPerformanceEstimator", estimator
+    )
+    collector = EthosUPerformance(
+        test_tflite_model,
+        target,
+        backends=["corstone-300", "corstone-310"],
+    )
+    collector.set_context(sample_context)
+
+    with pytest.raises(
+        ConfigurationError,
+        match="at most one Corstone backend.*corstone-300, corstone-310",
+    ):
+        collector.collect_data()
+
+    estimator.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("backends", "result_type"),
+    [
+        (["vela"], VelaPerformanceResult),
+        (["corstone-310"], CorstonePerformanceResult),
+        (["vela", "corstone-310"], CombinedPerformanceResult),
+    ],
+)
+def test_saved_model_performance_uses_converted_artifact_and_original_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    sample_context: Context,
+    tmp_path: Path,
+    backends: list[str],
+    result_type: type,
+) -> None:
+    """Serialize the converted file while identifying the original SavedModel."""
+    saved_model = tmp_path / "saved_model"
+    (saved_model / "variables").mkdir(parents=True)
+    (saved_model / "saved_model.pb").write_bytes(b"model")
+    (saved_model / "variables" / "variables.data").write_bytes(b"weights")
+    converted_model = tmp_path / "converted.tflite"
+    converted_model.write_bytes(b"converted model")
+    model_configuration = MagicMock(spec=ModelConfiguration)
+    model_configuration.model_path = str(converted_model)
+
+    target = EthosUConfiguration.load_profile("ethos-u55-256")
+    performance = PerformanceMetrics(
+        target,
+        NPUCycles(1, 2, 3, 4, 5, 6),
+        MemoryUsage(1, 2, 3, 4),
+        LayerwisePerfInfo(layerwise_info=[]),
+    )
+    vela_metrics = VelaPerf(
+        npu_cycles=3,
+        sram_access_cycles=1,
+        dram_access_cycles=2,
+        on_chip_flash_access_cycles=3,
+        off_chip_flash_access_cycles=4,
+        total_cycles=4,
+        batch_inference_time=1.0,
+        inferences_per_second=1000.0,
+        batch_size=1,
+        sram_memory_area_size=1,
+        dram_memory_area_size=2,
+        on_chip_flash_memory_area_size=3,
+        off_chip_flash_memory_area_size=4,
+        layerwise_performance_info=LayerwisePerfInfo(layerwise_info=[]),
+    )
+    vela_serializer = MagicMock(wraps=vela_metrics.to_standardized_output)
+    setattr(vela_metrics, "to_standardized_output", vela_serializer)
+
+    corstone_metrics = CorstonePerf(
+        CorstoneModelPerformanceMetrics(1, 2, 3, 4, 5, 6), []
+    )
+    corstone_serializer = MagicMock(wraps=corstone_metrics.to_standardized_output)
+    setattr(corstone_metrics, "to_standardized_output", corstone_serializer)
+    performance.corstone_metrics = corstone_metrics
+
+    estimator = MagicMock()
+    estimator.estimate.return_value = performance
+    estimator.vela_perf_metrics = vela_metrics
+    estimator.vela_compiler_options = None
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.data_collection.is_legacy_model",
+        MagicMock(return_value=True),
+    )
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.data_collection.get_tflite_model",
+        MagicMock(return_value=model_configuration),
+    )
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.data_collection.EthosUPerformanceEstimator",
+        MagicMock(return_value=estimator),
+    )
+    if "corstone-310" in backends:
+        mock_corstone_backend_configuration(monkeypatch)
+    collector = EthosUPerformance(saved_model, target, backends=backends)
+    collector.set_context(sample_context)
+
+    result = collector.collect_data()
+
+    assert isinstance(result, result_type)
+    assert isinstance(
+        result,
+        (VelaPerformanceResult, CorstonePerformanceResult, CombinedPerformanceResult),
+    )
+    validate_standardized_output(result.standardized_output)
+    assert result.standardized_output["model"]["name"] == "saved_model"
+    assert result.standardized_output["model"]["format"] == "saved_model"
+    assert result.standardized_output["model"]["size_bytes"] == 12
+    assert len(result.standardized_output["model"]["hash"]) == 64
+    if "vela" in backends:
+        assert vela_serializer.call_args.kwargs["model_path"] == converted_model
+    else:
+        vela_serializer.assert_not_called()
+    if "corstone-310" in backends:
+        assert corstone_serializer.call_args.kwargs["model_path"] == converted_model
+    else:
+        corstone_serializer.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("backends", "error"),
+    [
+        (["vela"], "Vela performance metrics were not produced"),
+        (["corstone-310"], "corstone-310 performance metrics were not produced"),
+    ],
+)
+def test_performance_collector_requires_backend_metrics(
+    monkeypatch: pytest.MonkeyPatch,
+    sample_context: Context,
+    test_tflite_model: Path,
+    backends: list[str],
+    error: str,
+) -> None:
+    """Requested backends must provide their native metrics."""
+    target = EthosUConfiguration.load_profile("ethos-u55-256")
+    metrics = PerformanceMetrics(
+        target,
+        NPUCycles(1, 2, 3, 4, 5, 6),
+        MemoryUsage(1, 2, 3, 4),
+        LayerwisePerfInfo(layerwise_info=[]),
+    )
+
+    class MockEstimator:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def estimate(self, _model: object) -> PerformanceMetrics:
+            return metrics
+
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.data_collection.EthosUPerformanceEstimator",
+        MockEstimator,
+    )
+    collector = EthosUPerformance(test_tflite_model, target, backends=backends)
+    collector.set_context(sample_context)
+
+    with pytest.raises(ConfigurationError, match=error):
+        collector.collect_data()
+
+
+def test_vela_serializer_failure_propagates(
+    monkeypatch: pytest.MonkeyPatch,
+    sample_context: Context,
+    test_tflite_model: Path,
+) -> None:
+    """Vela serialization errors must not fall back to target-level metrics."""
+    target = EthosUConfiguration.load_profile("ethos-u55-256")
+    estimator = MagicMock()
+    estimator.estimate.return_value = PerformanceMetrics(
+        target,
+        NPUCycles(1, 2, 3, 4, 5, 6),
+        MemoryUsage(1, 2, 3, 4),
+        LayerwisePerfInfo(layerwise_info=[]),
+    )
+    estimator.vela_perf_metrics.to_standardized_output.side_effect = RuntimeError(
+        "Vela serialization failed"
+    )
+    estimator.vela_compiler_options = None
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.data_collection.EthosUPerformanceEstimator",
+        MagicMock(return_value=estimator),
+    )
+    collector = EthosUPerformance(test_tflite_model, target, backends=["vela"])
+    collector.set_context(sample_context)
+
+    with pytest.raises(RuntimeError, match="Vela serialization failed"):
+        collector.collect_data()
+
+
+def test_corstone_serializer_failure_propagates(
+    monkeypatch: pytest.MonkeyPatch,
+    sample_context: Context,
+    test_tflite_model: Path,
+) -> None:
+    """Corstone serialization errors must not fabricate canonical output."""
+    target = EthosUConfiguration.load_profile("ethos-u55-256")
+    metrics = PerformanceMetrics(
+        target,
+        NPUCycles(1, 2, 3, 4, 5, 6),
+        MemoryUsage(1, 2, 3, 4),
+        LayerwisePerfInfo(layerwise_info=[]),
+        corstone_metrics=MagicMock(spec=CorstonePerf),
+    )
+    metrics.to_standardized_output = MagicMock(
+        side_effect=RuntimeError("Corstone serialization failed")
+    )
+    estimator = MagicMock()
+    estimator.estimate.return_value = metrics
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.data_collection.EthosUPerformanceEstimator",
+        MagicMock(return_value=estimator),
+    )
+    mock_corstone_backend_configuration(monkeypatch)
+    collector = EthosUPerformance(test_tflite_model, target, backends=["corstone-310"])
+    collector.set_context(sample_context)
+
+    with pytest.raises(RuntimeError, match="Corstone serialization failed"):
+        collector.collect_data()
 
 
 def test_optimization_performance_collector(
@@ -195,14 +643,14 @@ def test_optimization_performance_collector(
     collector.set_context(context)
     result = collector.collect_data()
 
-    assert isinstance(result, OptimizationPerformanceMetrics)
-    assert isinstance(result.original_perf_metrics, PerformanceMetrics)
-    assert isinstance(result.optimizations_perf_metrics, list)
-    assert len(result.optimizations_perf_metrics) == 1
-
-    opt, metrics = result.optimizations_perf_metrics[0]
-    assert opt == [OptimizationSettings("pruning", 0.5, None)]
-    assert isinstance(metrics, PerformanceMetrics)
+    assert isinstance(result, OptimizationPerformanceResult)
+    assert set(vars(result)) == {"standardized_output"}
+    validate_standardized_output(result.standardized_output)
+    metrics = result.standardized_output["results"][0]["metrics"]
+    assert {metric["qualifiers"]["phase"] for metric in metrics} == {
+        "before",
+        "after",
+    }
 
     context = ExecutionContext(
         config_parameters={"common_optimizations": {"optimizations": [[]]}}
@@ -240,19 +688,214 @@ def test_optimization_performance_collector(
         collector_bad_config.collect_data()
 
 
+def test_optimization_factory_returns_complete_result(tmp_path: Path) -> None:
+    """Optimization comparisons should own canonical output and advice."""
+    target = EthosUConfiguration.load_profile("ethos-u55-256")
+    model_path = tmp_path / "model.h5"
+    model_path.write_bytes(b"keras model")
+    original = PerformanceMetrics(
+        target,
+        NPUCycles(1, 2, 100, 4, 5, 6),
+        MemoryUsage(100, 200, 300, 400),
+        None,
+    )
+    optimized = PerformanceMetrics(
+        target,
+        NPUCycles(1, 2, 80, 4, 5, 6),
+        MemoryUsage(80, 150, 250, 350),
+        None,
+    )
+    settings = [OptimizationSettings("pruning", 0.5, None)]
+    action_resolver = MagicMock()
+    action_resolver.operator_compatibility_details.return_value = []
+    context = ExecutionContext(
+        advice_category={AdviceCategory.OPTIMIZATION},
+        action_resolver=action_resolver,
+        output_dir=tmp_path,
+    )
+    collector = object.__new__(EthosUOptimizationPerformance)
+    collector.model = model_path
+    collector.target = target
+    collector.backends = ["vela", "corstone-310"]
+    collector.backend_versions = {"vela": "5.0.0", "corstone-310": "unknown"}
+    collector.backend_configurations = {
+        "vela": {
+            "system_config": "Ethos_U55_High_End_Embedded",
+            "memory_mode": "Shared_Sram",
+        },
+        "corstone-310": {
+            "fvp": "corstone-310",
+            "target": "ethos-u55",
+            "mac": 256,
+            "profile": "AVH",
+        },
+    }
+    if hasattr(collector, "set_context"):
+        collector.set_context(context)
+    else:
+        collector.context = context
+
+    result = collector.create_optimization_performance_metrics(
+        original,
+        [(settings, optimized)],
+    )
+
+    assert isinstance(result, OptimizationPerformanceResult)
+    assert set(vars(result)) == {"standardized_output"}
+    validate_standardized_output(result.standardized_output)
+    canonical_results = result.standardized_output["results"]
+    results_by_producer = {
+        canonical_result["producer"]: canonical_result
+        for canonical_result in canonical_results
+    }
+    assert {
+        producer: canonical_result["mode"]
+        for producer, canonical_result in results_by_producer.items()
+    } == {
+        "vela": "predicted",
+        "corstone-310": "simulated",
+    }
+    assert {
+        backend["id"]: backend["configuration"]
+        for backend in result.standardized_output["backends"]
+    } == collector.backend_configurations
+    for canonical_result in canonical_results:
+        assert canonical_result["kind"] == "performance"
+        assert {
+            metric["qualifiers"]["phase"] for metric in canonical_result["metrics"]
+        } == {
+            "before",
+            "after",
+        }
+        assert canonical_result["advice"]
+        assert {item["category"] for item in canonical_result["advice"]} == {
+            "optimization"
+        }
+
+    vela_advice = " ".join(
+        item["message"] for item in results_by_producer["vela"]["advice"]
+    )
+    assert "SRAM used" in vela_advice
+    assert "NPU total cycles" not in vela_advice
+
+    corstone_advice = " ".join(
+        item["message"] for item in results_by_producer["corstone-310"]["advice"]
+    )
+    assert "NPU total cycles" in corstone_advice
+    assert "SRAM used" not in corstone_advice
+    assert "DRAM used" not in corstone_advice
+
+
+def test_optimization_estimator_records_effective_backend_configurations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Optimization output metadata must identify the configurations actually used."""
+    target = EthosUConfiguration.load_profile("ethos-u55-256")
+    assert target.compiler_options is not None
+    backend_repository = MagicMock()
+    backend_repository.get_backend_settings.return_value = (
+        Path("backend"),
+        {"profile": "AVH"},
+    )
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.data_collection.get_backend_repository",
+        lambda: backend_repository,
+    )
+    estimator = MagicMock()
+    estimator_type = MagicMock(return_value=estimator)
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.data_collection.EthosUPerformanceEstimator",
+        estimator_type,
+    )
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.data_collection.get_vela_version",
+        lambda: "5.0.0",
+    )
+    collector = object.__new__(EthosUOptimizationPerformance)
+    collector.target = target
+    collector.backends = ["vela", "corstone-310"]
+    collector.context = ExecutionContext()
+
+    assert collector.create_estimator() is estimator
+
+    assert collector.backend_versions == {
+        "vela": "5.0.0",
+        "corstone-310": "unknown",
+    }
+    assert collector.backend_configurations["vela"] == {
+        "system_config": target.compiler_options.system_config,
+        "memory_mode": target.compiler_options.memory_mode,
+        "accelerator_config": str(target.compiler_options.accelerator_config),
+        "max_block_dependency": target.compiler_options.max_block_dependency,
+        "tensor_allocator": target.compiler_options.tensor_allocator,
+        "optimization_strategy": target.compiler_options.optimization_strategy,
+    }
+    assert collector.backend_configurations["corstone-310"] == {
+        "fvp": "corstone-310",
+        "target": "ethos-u55",
+        "mac": 256,
+        "profile": "AVH",
+    }
+    backend_repository.get_backend_settings.assert_called_once_with("corstone-310")
+
+
+def test_optimization_estimator_rejects_multiple_corstone_backends(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reject configurations the single Corstone metrics slot cannot represent."""
+    target = EthosUConfiguration.load_profile("ethos-u55-256")
+    estimator = MagicMock()
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.data_collection.EthosUPerformanceEstimator",
+        estimator,
+    )
+    collector = object.__new__(EthosUOptimizationPerformance)
+    collector.target = target
+    collector.backends = ["corstone-300", "corstone-310"]
+    collector.context = ExecutionContext()
+
+    with pytest.raises(
+        ConfigurationError,
+        match="at most one Corstone backend.*corstone-300, corstone-310",
+    ):
+        collector.create_estimator()
+
+    estimator.assert_not_called()
+
+
 def mock_performance_estimation(
     monkeypatch: pytest.MonkeyPatch, target: EthosUConfiguration
 ) -> None:
-    """Mock performance estimation."""
+    """Mock performance estimation with native Vela output."""
     metrics = PerformanceMetrics(
         target,
         NPUCycles(1, 2, 3, 4, 5, 6),
         MemoryUsage(1, 2, 3, 4),
         LayerwisePerfInfo(layerwise_info=[]),
     )
+    vela_metrics = VelaPerf(
+        npu_cycles=3,
+        sram_access_cycles=1,
+        dram_access_cycles=2,
+        on_chip_flash_access_cycles=3,
+        off_chip_flash_access_cycles=4,
+        total_cycles=4,
+        batch_inference_time=1.0,
+        inferences_per_second=1000.0,
+        batch_size=1,
+        sram_memory_area_size=1,
+        dram_memory_area_size=2,
+        on_chip_flash_memory_area_size=3,
+        off_chip_flash_memory_area_size=4,
+        layerwise_performance_info=LayerwisePerfInfo(layerwise_info=[]),
+    )
+    estimator = MagicMock()
+    estimator.estimate.return_value = metrics
+    estimator.vela_perf_metrics = vela_metrics
+    estimator.vela_compiler_options = None
     monkeypatch.setattr(
-        "mlia.target.ethos_u.data_collection.EthosUPerformanceEstimator.estimate",
-        MagicMock(return_value=metrics),
+        "mlia.target.ethos_u.data_collection.EthosUPerformanceEstimator",
+        MagicMock(return_value=estimator),
     )
 
 
@@ -284,9 +927,12 @@ def mock_performance_estimation_with_vela(
 
 
 def mock_performance_estimation_with_corstone(
-    monkeypatch: pytest.MonkeyPatch, target: EthosUConfiguration
-) -> None:
+    monkeypatch: pytest.MonkeyPatch,
+    target: EthosUConfiguration,
+    profile: str = "default",
+) -> MagicMock:
     """Mock performance estimation with Corstone metrics."""
+    mock_corstone_backend_configuration(monkeypatch, profile)
     metrics = PerformanceMetrics(
         target,
         NPUCycles(1, 2, 3, 4, 5, 6),
@@ -294,28 +940,27 @@ def mock_performance_estimation_with_corstone(
         LayerwisePerfInfo(layerwise_info=[]),
     )
     metrics.corstone_metrics = MagicMock(spec=CorstonePerf)
-    setattr(
-        metrics,
-        "to_standardized_output",
-        MagicMock(
-            return_value={
-                "schema_version": "1.0.0",
-                "backends": [{"id": "corstone-310"}],
-                "results": [{"kind": "performance"}],
-            }
-        ),
+    serializer = MagicMock(
+        return_value={
+            "schema_version": "1.0.0",
+            "backends": [{"id": "corstone-310"}],
+            "results": [{"kind": "performance"}],
+        }
     )
+    setattr(metrics, "to_standardized_output", serializer)
 
     monkeypatch.setattr(
         "mlia.target.ethos_u.data_collection.EthosUPerformanceEstimator.estimate",
         MagicMock(return_value=metrics),
     )
+    return serializer
 
 
 def mock_performance_estimation_with_both(
     monkeypatch: pytest.MonkeyPatch, target: EthosUConfiguration
 ) -> None:
     """Mock performance estimation with both Vela and Corstone metrics."""
+    mock_corstone_backend_configuration(monkeypatch)
     metrics = PerformanceMetrics(
         target,
         NPUCycles(1, 2, 3, 4, 5, 6),
@@ -365,12 +1010,11 @@ def test_operator_compatibility_pytorch_model(
         MagicMock(return_value=True),
     )
 
-    mock_result = MagicMock(spec=VelaCompatibilityResult)
-    mock_result.legacy_info = MagicMock(spec=Operators)
-    mock_result.to_standardized_output = MagicMock(return_value={})
+    operators = MagicMock(spec=Operators)
+    operators.to_standardized_output.return_value = {}
     monkeypatch.setattr(
         "mlia.target.ethos_u.data_collection.supported_operators",
-        MagicMock(return_value=mock_result),
+        MagicMock(return_value=operators),
     )
 
     monkeypatch.setattr(
@@ -403,12 +1047,11 @@ def test_operator_compatibility_tosa_model(
         MagicMock(return_value=True),
     )
 
-    mock_result = MagicMock(spec=VelaCompatibilityResult)
-    mock_result.legacy_info = MagicMock(spec=Operators)
-    mock_result.to_standardized_output = MagicMock(return_value={})
+    operators = MagicMock(spec=Operators)
+    operators.to_standardized_output.return_value = {}
     monkeypatch.setattr(
         "mlia.target.ethos_u.data_collection.supported_operators",
-        MagicMock(return_value=mock_result),
+        MagicMock(return_value=operators),
     )
 
     monkeypatch.setattr(
@@ -467,7 +1110,8 @@ def test_performance_collector_pytorch_model(
     collector.set_context(sample_context)
 
     result = collector.collect_data()
-    assert isinstance(result, PerformanceMetrics)
+    assert isinstance(result, VelaPerformanceResult)
+    validate_standardized_output(result.standardized_output)
 
 
 def test_performance_collector_pte_rejects_unsupported_default_target(
@@ -513,6 +1157,9 @@ def test_performance_collector_pytorch_with_corstone_backend(
         MemoryUsage(1, 2, 3, 4),
         LayerwisePerfInfo(layerwise_info=[]),
     )
+    metrics.corstone_metrics = CorstonePerf(
+        CorstoneModelPerformanceMetrics(1, 2, 3, 4, 5, 6), []
+    )
     captured_backends: list[str] | None = None
 
     class MockEstimator:
@@ -532,13 +1179,15 @@ def test_performance_collector_pytorch_with_corstone_backend(
         "mlia.target.ethos_u.data_collection.EthosUPerformanceEstimator",
         MockEstimator,
     )
+    mock_corstone_backend_configuration(monkeypatch)
 
     collector = EthosUPerformance(pytorch_model, target, backends=["corstone-300"])
     collector.set_context(sample_context)
 
     result = collector.collect_data()
 
-    assert isinstance(result, PerformanceMetrics)
+    assert isinstance(result, CorstonePerformanceResult)
+    validate_standardized_output(result.standardized_output)
     assert captured_backends == ["corstone-300"]
 
 
@@ -570,7 +1219,8 @@ def test_performance_collector_tosa_model(
     collector.set_context(sample_context)
 
     result = collector.collect_data()
-    assert isinstance(result, PerformanceMetrics)
+    assert isinstance(result, VelaPerformanceResult)
+    validate_standardized_output(result.standardized_output)
 
 
 def test_performance_collector_tosa_model_rejects_corstone_backend(

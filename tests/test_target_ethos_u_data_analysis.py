@@ -15,7 +15,6 @@ from mlia.backend.vela.compat import (
     Operator,
     OperatorIdentity,
     Operators,
-    VelaCompatibilityResult,
 )
 from mlia.core.common import DataItem
 from mlia.core.data_analysis import Fact
@@ -308,9 +307,7 @@ def test_analyze_activation_function_detects_suboptimal_activation() -> None:
         _make_npu_supported_operator("mul_op", "MUL"),
     ]
 
-    vela_result = VelaCompatibilityResult(legacy_info=Operators(ops=ops))
-
-    analyzer.analyze_data(vela_result)
+    analyzer.analyze_data(Operators(ops=ops))
 
     facts = analyzer.get_analyzed_data()
     suboptimal_facts = [
@@ -337,9 +334,7 @@ def test_analyze_activation_function_no_matching_pattern() -> None:
         _make_npu_supported_operator("pool1", "MAX_POOL"),
     ]
 
-    vela_result = VelaCompatibilityResult(legacy_info=Operators(ops=ops))
-
-    analyzer.analyze_data(vela_result)
+    analyzer.analyze_data(Operators(ops=ops))
 
     facts = analyzer.get_analyzed_data()
     assert not any(isinstance(fact, EthosULayerSuboptimalActivation) for fact in facts)
@@ -350,7 +345,6 @@ def test_analyze_activation_function_no_matching_pattern() -> None:
     [
         (
             CorstonePerformanceResult(
-                legacy_info=MagicMock(),
                 standardized_output={
                     "results": [
                         {
@@ -449,7 +443,6 @@ def test_analyze_activation_function_no_matching_pattern() -> None:
         ),
         (
             CombinedPerformanceResult(
-                legacy_info=MagicMock(),
                 standardized_output={
                     "results": [
                         {
@@ -511,7 +504,6 @@ def test_analyze_activation_function_no_matching_pattern() -> None:
         ),
         (
             VelaPerformanceResult(
-                legacy_info=MagicMock(),
                 standardized_output={
                     "results": [
                         {
@@ -634,6 +626,36 @@ def test_ethos_u_data_analyzer_performance_results(
     ]
     for excluded_fact_type in excluded_fact_types:
         assert not any(isinstance(fact, excluded_fact_type) for fact in facts)
+
+
+def test_performance_analysis_ignores_breakdowns_without_entities() -> None:
+    """Layer facts must not reference entities absent from canonical output."""
+    result = VelaPerformanceResult(
+        standardized_output={
+            "results": [
+                {
+                    "entities": [],
+                    "breakdowns": [
+                        {
+                            "entity_id": "source_operator/operator/0",
+                            "metrics": [
+                                {
+                                    "name": "op_cycles",
+                                    "value": 500,
+                                    "unit": "cycles",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ]
+        }
+    )
+    analyzer = EthosUDataAnalyzer()
+
+    analyzer.analyze_data(result)
+
+    assert analyzer.get_analyzed_data() == []
 
 
 def test_ethos_u_data_analyzer_logs_unhandled_data(

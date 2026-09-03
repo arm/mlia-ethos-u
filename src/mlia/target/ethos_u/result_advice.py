@@ -60,9 +60,9 @@ def _generate_advice(data_item: DataItem, context: Context) -> list[Advice]:
 
 
 def attach_result_advice(
-    output: dict[str, Any], data_item: DataItem, context: Context
+    output: dict[str, Any], analysis_data: DataItem, context: Context
 ) -> None:
-    """Attach generated advice to the single result represented by data_item."""
+    """Attach advice generated from internal data to one canonical result."""
     results = output.get("results")
     if (
         not isinstance(results, list)
@@ -73,7 +73,7 @@ def attach_result_advice(
             "Ethos-U advice generation requires one complete standardized result."
         )
 
-    advice = _generate_advice(data_item, context)
+    advice = _generate_advice(analysis_data, context)
     if advice:
         results[0].setdefault("advice", []).extend(
             item.to_schema().to_dict() for item in advice

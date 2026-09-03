@@ -122,6 +122,13 @@ except ModuleNotFoundError:
 TFLiteChecker = LegacyChecker
 
 
+@dataclass
+class TFLiteCompatibilityResult:
+    """Canonical TensorFlow Lite compatibility result."""
+
+    standardized_output: dict[str, Any]
+
+
 # Model conversion helpers
 try:  # pragma: no cover - exercised when legacy is installed
     from mlia.nn.tensorflow.config import (

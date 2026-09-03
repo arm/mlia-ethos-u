@@ -100,6 +100,6 @@ def test_performance_vela_version_is_retried_after_failed_load(
     monkeypatch.setattr(performance, "_load_vela_version", load_once_then_succeed)
 
     with pytest.raises(BackendUnavailableError):
-        performance._get_vela_version()
+        performance.get_vela_version()
 
-    assert performance._get_vela_version() == "5.0.0"
+    assert performance.get_vela_version() == "5.0.0"

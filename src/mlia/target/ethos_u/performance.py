@@ -117,6 +117,7 @@ class PerformanceMetrics:
 
         # Build target config dict from EthosUConfiguration
         target_config: dict[str, Any] = {
+            "profile_name": self.target_config.profile_name,
             "target": self.target_config.target,
             "mac": self.target_config.mac,
         }
@@ -137,26 +138,23 @@ class PerformanceMetrics:
 
 @dataclass
 class CorstonePerformanceResult:
-    """Wrapper for performance metrics with both legacy and standardized output."""
+    """Canonical Corstone performance result."""
 
-    legacy_info: PerformanceMetrics
-    standardized_output: dict[str, Any] | None = None
+    standardized_output: dict[str, Any]
 
 
 @dataclass
 class VelaPerformanceResult:
-    """Wrapper for Vela performance metrics with both legacy and standardized output."""
+    """Canonical Vela performance result."""
 
-    legacy_info: PerformanceMetrics
-    standardized_output: dict[str, Any] | None = None
+    standardized_output: dict[str, Any]
 
 
 @dataclass
 class CombinedPerformanceResult:
-    """Wrapper for combined multi-backend performance metrics."""
+    """Canonical combined multi-backend performance result."""
 
-    legacy_info: PerformanceMetrics
-    standardized_output: dict[str, Any] | None = None
+    standardized_output: dict[str, Any]
 
 
 def merge_performance_outputs(
@@ -206,6 +204,45 @@ class OptimizationPerformanceMetrics:
     optimizations_perf_metrics: list[
         tuple[list[OptimizationSettings], PerformanceMetrics]
     ]
+
+
+def optimization_performance_metrics_for_backend(
+    comparison: OptimizationPerformanceMetrics,
+    backend_name: str,
+) -> OptimizationPerformanceMetrics:
+    """Return an optimization comparison containing only one backend's data."""
+
+    def backend_metrics(performance: PerformanceMetrics) -> PerformanceMetrics:
+        if backend_name == "vela":
+            return PerformanceMetrics(
+                target_config=performance.target_config,
+                npu_cycles=None,
+                memory_usage=performance.memory_usage,
+                layerwise_perf_info=performance.layerwise_perf_info,
+            )
+        if is_corstone_backend(backend_name):
+            return PerformanceMetrics(
+                target_config=performance.target_config,
+                npu_cycles=performance.npu_cycles,
+                memory_usage=None,
+                layerwise_perf_info=None,
+            )
+        raise ValueError(f"Unsupported Ethos-U performance backend: {backend_name}")
+
+    return OptimizationPerformanceMetrics(
+        original_perf_metrics=backend_metrics(comparison.original_perf_metrics),
+        optimizations_perf_metrics=[
+            (settings, backend_metrics(performance))
+            for settings, performance in comparison.optimizations_perf_metrics
+        ],
+    )
+
+
+@dataclass
+class OptimizationPerformanceResult:
+    """Canonical optimization comparison result."""
+
+    standardized_output: dict[str, Any]
 
 
 class VelaPerformanceEstimator(

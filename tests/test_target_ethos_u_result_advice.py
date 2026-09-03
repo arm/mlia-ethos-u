@@ -12,7 +12,6 @@ from mlia.backend.vela.compat import (
     Operator,
     OperatorIdentity,
     Operators,
-    VelaCompatibilityResult,
 )
 from mlia.core.common import AdviceCategory
 from mlia.core.context import ExecutionContext
@@ -45,13 +44,9 @@ def test_compatibility_advice_is_attached_to_its_result() -> None:
             }
         ]
     }
-    data_item = VelaCompatibilityResult(
-        legacy_info=operators,
-        standardized_output=output,
-    )
     context = ExecutionContext(advice_category={AdviceCategory.COMPATIBILITY})
 
-    attach_result_advice(output, data_item, context)
+    attach_result_advice(output, operators, context)
 
     advice = output["results"][0]["advice"]
     assert advice
@@ -71,10 +66,7 @@ def test_performance_advice_is_attached_to_its_result() -> None:
             }
         ]
     }
-    data_item = VelaPerformanceResult(
-        legacy_info=MagicMock(),
-        standardized_output=output,
-    )
+    performance = VelaPerformanceResult(output)
     action_resolver = MagicMock()
     action_resolver.check_operator_compatibility.return_value = []
     context = ExecutionContext(
@@ -82,7 +74,7 @@ def test_performance_advice_is_attached_to_its_result() -> None:
         action_resolver=action_resolver,
     )
 
-    attach_result_advice(output, data_item, context)
+    attach_result_advice(output, performance, context)
 
     advice = output["results"][0]["advice"]
     assert advice

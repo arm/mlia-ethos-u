@@ -243,6 +243,9 @@ class LayerHotSpotPatternAnalyzer(PatternAnalyzer):
                 " more accurate impact results."
             )
 
+        if not high_impact_layer_facts:
+            return []
+
         # Create single grouped pattern fact for all detected high network layers
         pattern = HighImpactLayersPattern(
             facts=high_impact_layer_facts,

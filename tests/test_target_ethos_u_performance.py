@@ -42,7 +42,7 @@ def test_performance_metrics_to_standardized_output_uses_default_backend_name(
     tmp_path: Path,
 ) -> None:
     """Use default backend name and build target config."""
-    target_cfg = MagicMock(target="ethos-u55", mac=256)
+    target_cfg = MagicMock(profile_name="ethos-u55-256", target="ethos-u55", mac=256)
     backend_metrics = MagicMock()
 
     metrics = PerformanceMetrics(
@@ -57,7 +57,11 @@ def test_performance_metrics_to_standardized_output_uses_default_backend_name(
     backend_metrics.to_standardized_output.assert_called_once()
     _, kwargs = backend_metrics.to_standardized_output.call_args
     assert kwargs["backend_name"] == "corstone-300"
-    assert kwargs["target_config"] == {"target": "ethos-u55", "mac": 256}
+    assert kwargs["target_config"] == {
+        "profile_name": "ethos-u55-256",
+        "target": "ethos-u55",
+        "mac": 256,
+    }
     assert result is backend_metrics.to_standardized_output.return_value
 
 

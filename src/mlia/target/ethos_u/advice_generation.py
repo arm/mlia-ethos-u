@@ -16,6 +16,7 @@ from mlia.core.common import AdviceCategory, DataItem
 from mlia.core.output_schema import AdviceCategory as SchemaAdviceCategory
 from mlia.core.output_schema import AdviceSeverity
 from mlia.target.ethos_u.common_reporters import (
+    ModelHasCustomOperators,
     ModelIsNotTFLiteCompatible,
     TFLiteCompatibilityCheckFailed,
     handle_model_is_not_tflite_compatible_common,
@@ -202,6 +203,22 @@ class EthosUAdviceProducer(FactBasedAdviceProducer):
     ) -> None:
         """Advice for the failed TensorFlow Lite compatibility checks."""
         handle_tflite_check_failed_common(self, _data_item)
+
+    @produce_advice.register
+    @advice_category(AdviceCategory.COMPATIBILITY)
+    def handle_model_has_custom_operators(
+        self, _data_item: ModelHasCustomOperators
+    ) -> None:
+        """Advise when model loading requires unavailable custom objects."""
+        self.add_advice(
+            message=(
+                "Model conversion requires custom operators or objects that are not "
+                "available to MLIA. Register the required custom objects and retry "
+                "the compatibility check."
+            ),
+            category=SchemaAdviceCategory.COMPATIBILITY,
+            severity=AdviceSeverity.WARNING,
+        )
 
     @produce_advice.register
     @advice_category(AdviceCategory.COMPATIBILITY, AdviceCategory.PERFORMANCE)

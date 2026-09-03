@@ -43,6 +43,7 @@ class EthosUConfiguration(TargetProfile):
         super().__init__(target)
 
         mac = kwargs["mac"]
+        self.profile_name = kwargs.get("profile_name") or f"{target}-{mac}"
 
         config_in = kwargs.get("config")
         if not config_in:

@@ -3,6 +3,7 @@
 """Tests for ethos-specific API behavior."""
 
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -11,8 +12,13 @@ from mlia import ValidationMode, run_advisor
 from mlia.api import get_advisor
 from mlia.backend.vela.compat import Operators, VelaCompatibilityResult
 from mlia.core.context import ExecutionContext
+from mlia.core.output_validation import validate_standardized_output
 from mlia.target.ethos_u.advisor import EthosUInferenceAdvisor
 from mlia.target.ethos_u.data_collection import EthosUOperatorCompatibility
+from mlia.target.ethos_u.utils.tflite_shims import (
+    TFLiteCompatibilityInfo,
+    TFLiteCompatibilityStatus,
+)
 
 
 def test_get_advisor_ethos(test_keras_model: Path) -> None:
@@ -21,6 +27,46 @@ def test_get_advisor_ethos(test_keras_model: Path) -> None:
         ExecutionContext(), "ethos-u55-256", str(test_keras_model)
     )
     assert isinstance(ethos_u55_advisor, EthosUInferenceAdvisor)
+
+
+def test_run_advisor_returns_legacy_tflite_failure_output(
+    monkeypatch: pytest.MonkeyPatch,
+    test_keras_model: Path,
+) -> None:
+    """The API should return canonical output when the TFLite precheck fails."""
+    compatibility = TFLiteCompatibilityInfo(
+        status=TFLiteCompatibilityStatus.UNKNOWN_ERROR,
+        conversion_exception=RuntimeError("conversion failed"),
+    )
+    checker = MagicMock()
+    checker.check_compatibility.return_value = compatibility
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.data_collection.is_legacy_model",
+        MagicMock(return_value=True),
+    )
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.data_collection.LegacyChecker",
+        MagicMock(return_value=checker),
+    )
+    monkeypatch.setattr(mlia_api, "validate_backend", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        mlia_api,
+        "ensure_backends_installed",
+        lambda *args, **kwargs: None,
+    )
+
+    result = run_advisor(
+        advice_category="compatibility",
+        target_profile="ethos-u55-256",
+        model=test_keras_model,
+        validation=ValidationMode.OFF,
+    )
+
+    validate_standardized_output(result)
+    compatibility_result = result["results"][0]
+    assert compatibility_result["kind"] == "compatibility"
+    assert compatibility_result["status"] == "failed"
+    assert compatibility_result["advice"]
 
 
 def test_run_advisor_returns_standardized_output_without_target_event_handler(
@@ -34,10 +80,8 @@ def test_run_advisor_returns_standardized_output_without_target_event_handler(
         backend_config={},
         cli_arguments=[],
     )
-    result_item = VelaCompatibilityResult(
-        legacy_info=Operators([]),
-        standardized_output=standardized_output,
-    )
+    validate_standardized_output(standardized_output)
+    result_item = VelaCompatibilityResult(standardized_output)
 
     monkeypatch.setattr(
         EthosUOperatorCompatibility,

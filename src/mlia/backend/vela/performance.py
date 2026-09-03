@@ -235,7 +235,7 @@ def _load_vela_version() -> str:
     return ethosu_vela_version
 
 
-def _get_vela_version() -> str:
+def get_vela_version() -> str:
     """Return cached Vela version or load it."""
     global _VELA_VERSION_CACHE
 
@@ -297,7 +297,7 @@ class PerformanceMetrics:
 
         # Create backend with version
         try:
-            backend_version = _get_vela_version()
+            backend_version = get_vela_version()
         except Exception as exc:
             logger.warning("Failed to get vela version: %s", exc)
             backend_version = "unknown"
@@ -312,16 +312,19 @@ class PerformanceMetrics:
         # Create target with NPU component
         target_type = (target_config or {}).get("target", "ethos-u")
         mac = (target_config or {}).get("mac", "unknown")
+        profile_name = (target_config or {}).get("profile_name")
+        if profile_name is None:
+            profile_name = f"{target_type}-{mac}" if mac != "unknown" else target_type
 
         npu_component = schema.Component(
             type=schema.ComponentType.NPU,
             family=target_type,
             model=None,
-            variant=mac if mac != "unknown" else None,
+            variant=str(mac) if mac != "unknown" else None,
         )
 
         target = schema.Target(
-            profile_name=target_type,
+            profile_name=profile_name,
             target_type="npu",
             components=[npu_component],
             configuration=target_config or {},

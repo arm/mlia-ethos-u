@@ -297,16 +297,19 @@ class Operators:
         # Create target with NPU component
         target_type = (target_config or {}).get("target", "ethos-u")
         mac = (target_config or {}).get("mac", "unknown")
+        profile_name = (target_config or {}).get("profile_name")
+        if profile_name is None:
+            profile_name = f"{target_type}-{mac}" if mac != "unknown" else target_type
 
         npu_component = schema.Component(
             type=schema.ComponentType.NPU,
             family=target_type,
             model=None,
-            variant=mac if mac != "unknown" else None,
+            variant=str(mac) if mac != "unknown" else None,
         )
 
         target = schema.Target(
-            profile_name=target_type,
+            profile_name=profile_name,
             target_type="npu",
             components=[npu_component],
             configuration=target_config or {},
@@ -417,10 +420,9 @@ class Operators:
 
 @dataclass
 class VelaCompatibilityResult:
-    """Wrapper for Vela compatibility with both legacy and standardized output."""
+    """Canonical Vela compatibility result."""
 
-    legacy_info: Operators
-    standardized_output: dict[str, Any] | None = None
+    standardized_output: dict[str, Any]
 
 
 def _operators_from_graph(

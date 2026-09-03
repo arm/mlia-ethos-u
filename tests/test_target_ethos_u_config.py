@@ -36,6 +36,7 @@ def test_ethosu_target() -> None:
     """Test Ethos-U target configuration init."""
     default_config = EthosUConfiguration.load_profile("ethos-u55-256")
 
+    assert default_config.profile_name == "ethos-u55-256"
     assert default_config.target == "ethos-u55"
     assert default_config.mac == 256
     assert default_config.compiler_options is not None

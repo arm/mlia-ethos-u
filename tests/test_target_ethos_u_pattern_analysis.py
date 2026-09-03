@@ -239,6 +239,13 @@ def test_analyze_patterns_expected_exception() -> None:
         analyzer.analyze_patterns(fact)
 
 
+def test_layer_hotspot_pattern_analyzer_ignores_nonperformance_facts() -> None:
+    """Compatibility-only facts should not create empty performance patterns."""
+    analyzer = LayerHotSpotPatternAnalyzer()
+
+    assert analyzer.analyze_patterns([Fact()]) == []
+
+
 @pytest.mark.parametrize(
     "facts, pattern_type, expected_facts",
     [
