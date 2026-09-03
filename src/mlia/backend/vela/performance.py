@@ -8,7 +8,6 @@ import csv
 import io
 import logging
 import math
-import os
 import xml.etree.ElementTree as ET
 from collections import Counter
 from dataclasses import dataclass, field, fields
@@ -116,14 +115,52 @@ def _split_locations(value: str) -> list[str]:
     return [part for part in value.split(";") if part]
 
 
+_VELA_PERFORMANCE_LAYER_KIND = "vela_performance_layer"
+_VELA_PERFORMANCE_GROUP_KIND = "vela_performance_group"
+
+
 def _source_operator_entity_id(source_reference: str) -> str:
     """Return the canonical source-operator entity ID."""
     return f"source_operator/{source_reference}"
 
 
+def _performance_layer_entity_id(
+    layer_index: int, source_index: int | None = None
+) -> str:
+    """Return a result-local entity ID for one Vela performance layer."""
+    suffix = (
+        str(layer_index)
+        if source_index is None
+        else f"{layer_index}/source/{source_index}"
+    )
+    return f"{_VELA_PERFORMANCE_LAYER_KIND}/{suffix}"
+
+
 def _performance_group_entity_id(index: int) -> str:
     """Return a result-local entity ID for one aggregate performance row."""
-    return f"performance_group/{index}"
+    return f"{_VELA_PERFORMANCE_GROUP_KIND}/{index}"
+
+
+def _has_unambiguous_tflite_operator_provenance(model_path: Path) -> bool:
+    """Return whether Vela references can identify source TFLite operators."""
+    if model_path.suffix.lower() != ".tflite":
+        return False
+
+    try:
+        from ethosu.vela.tflite.Model import Model as TFLiteModel
+
+        model_buffer = model_path.read_bytes()
+        if not TFLiteModel.ModelBufferHasIdentifier(model_buffer, 0):
+            return False
+        model = TFLiteModel.GetRootAs(model_buffer)
+    except Exception as exc:  # Provenance failures must conservatively withhold links.
+        logger.debug("Unable to inspect TFLite source provenance: %s", exc)
+        return False
+
+    # Vela records only Operation.op_index in debug DB ext_key. TFLite operator
+    # indexes are local to a subgraph, but the database omits subgraph_index, so
+    # only a proven single-subgraph model has an unambiguous source identity.
+    return model.SubgraphsLength() == 1
 
 
 def _read_debug_db_table(debug_db_path: Path, table_name: str) -> list[dict[str, str]]:
@@ -138,8 +175,10 @@ def _read_debug_db_table(debug_db_path: Path, table_name: str) -> list[dict[str,
     return list(csv.DictReader(io.StringIO(table.text.strip())))
 
 
-def _debug_db_performance_locations(debug_db_path: Path) -> list[list[str]]:
-    """Return per-performance-row TFLite source locations from Vela debug DB."""
+def _debug_db_performance_source_references(
+    debug_db_path: Path,
+) -> list[list[str]]:
+    """Return Vela source references associated with each performance row."""
     source_rows = _read_debug_db_table(debug_db_path, "source")
     perf_rows = _read_debug_db_table(debug_db_path, "perf")
 
@@ -149,17 +188,15 @@ def _debug_db_performance_locations(debug_db_path: Path) -> list[list[str]]:
         if row.get("id") is not None
     }
 
-    locations: list[list[str]] = []
+    references: list[list[str]] = []
     for row in perf_rows:
         source_id = row.get("source_id")
         ext_key = ext_key_by_source_id.get(str(source_id))
         if ext_key is None or ext_key == "" or ext_key == "-1":
-            raise ValueError(
-                "Vela debug database performance row does not map to a TFLite "
-                f"operator index: source_id={source_id!r}"
-            )
-        locations.append([f"operator/{int(ext_key)}"])
-    return locations
+            references.append([])
+            continue
+        references.append([f"operator/{int(ext_key)}"])
+    return references
 
 
 def _average_memory_usage(layerwise_info: LayerwisePerfInfo) -> float | None:
@@ -410,6 +447,11 @@ class PerformanceMetrics:
 
         entities: list[schema.Entity] = []
         breakdowns = []
+        source_operator_provenance_is_unambiguous = (
+            _has_unambiguous_tflite_operator_provenance(model_path)
+        )
+        uses_performance_layer_entities = False
+        performance_group_child_kinds: set[str] = set()
         for layer_index, layer_info in enumerate(
             self.layerwise_performance_info.layerwise_info
         ):
@@ -477,60 +519,130 @@ class PerformanceMetrics:
                     ]
                 )
             source_locations = list(dict.fromkeys(layer_info.source_locations))
-            if not source_locations:
-                raise ValueError(
-                    "Vela performance layer is missing canonical source locations: "
-                    f"{layer_info.name!r}"
-                )
-            source_operator_ids = [
-                _source_operator_entity_id(location) for location in source_locations
-            ]
-            for source_operator_id, source_location in zip(
-                source_operator_ids, source_locations
-            ):
-                existing_entity = next(
-                    (entity for entity in entities if entity.id == source_operator_id),
-                    None,
-                )
-                if existing_entity is not None:
-                    if existing_entity.placement != layer_info.placement:
-                        raise ValueError(
-                            "Vela performance rows assign conflicting placements "
-                            f"to {source_operator_id!r}."
-                        )
-                    continue
-                entities.append(
-                    schema.Entity(
-                        id=source_operator_id,
-                        kind=schema.ENTITY_KIND_SOURCE_OPERATOR,
-                        name=source_location,
-                        placement=layer_info.placement,
-                    )
-                )
-            if len(source_operator_ids) == 1:
-                entity_id = source_operator_ids[0]
-            else:
-                entity_id = _performance_group_entity_id(layer_index)
-                entities.append(
-                    schema.Entity(
-                        id=entity_id,
-                        kind="performance_group",
-                        name=layer_info.tflite_operator or layer_info.name,
-                        child_ids=source_operator_ids,
-                        placement=layer_info.placement,
-                        attributes={"layer_name": layer_info.name},
-                    )
-                )
+            display_name = layer_info.tflite_operator or layer_info.name
+            if source_operator_provenance_is_unambiguous and source_locations:
+                source_operator_ids = [
+                    _source_operator_entity_id(location)
+                    for location in source_locations
+                ]
                 for source_operator_id in source_operator_ids:
-                    source_entity = next(
-                        entity for entity in entities if entity.id == source_operator_id
+                    existing_entity = next(
+                        (
+                            entity
+                            for entity in entities
+                            if entity.id == source_operator_id
+                        ),
+                        None,
                     )
-                    if entity_id not in source_entity.parent_ids:
-                        source_entity.parent_ids.append(entity_id)
+                    if existing_entity is not None:
+                        if existing_entity.placement != layer_info.placement:
+                            raise ValueError(
+                                "Vela performance rows assign conflicting placements "
+                                f"to {source_operator_id!r}."
+                            )
+                        continue
+                    entities.append(
+                        schema.Entity(
+                            id=source_operator_id,
+                            kind=schema.ENTITY_KIND_SOURCE_OPERATOR,
+                            name=display_name,
+                            placement=layer_info.placement,
+                            attributes={"layer_name": layer_info.name},
+                        )
+                    )
+                if len(source_operator_ids) == 1:
+                    entity_id = source_operator_ids[0]
+                else:
+                    entity_id = _performance_group_entity_id(layer_index)
+                    performance_group_child_kinds.add(
+                        schema.ENTITY_KIND_SOURCE_OPERATOR
+                    )
+                    entities.append(
+                        schema.Entity(
+                            id=entity_id,
+                            kind=_VELA_PERFORMANCE_GROUP_KIND,
+                            name=display_name,
+                            child_ids=source_operator_ids,
+                            placement=layer_info.placement,
+                            attributes={"layer_name": layer_info.name},
+                        )
+                    )
+                    for source_operator_id in source_operator_ids:
+                        source_entity = next(
+                            entity
+                            for entity in entities
+                            if entity.id == source_operator_id
+                        )
+                        if entity_id not in source_entity.parent_ids:
+                            source_entity.parent_ids.append(entity_id)
+            else:
+                # Do not manufacture source_operator identities from ext_key here.
+                # For non-TFLite inputs it is not a TFLite identity, and for
+                # multi-subgraph TFLite it lacks the subgraph index needed to
+                # distinguish repeated operator indexes such as operator/0.
+                uses_performance_layer_entities = True
+                if len(source_locations) <= 1:
+                    entity_id = _performance_layer_entity_id(layer_index)
+                    attributes = {"layer_name": layer_info.name}
+                    if source_locations:
+                        attributes["vela_source_reference"] = source_locations[0]
+                    entities.append(
+                        schema.Entity(
+                            id=entity_id,
+                            kind=_VELA_PERFORMANCE_LAYER_KIND,
+                            name=display_name,
+                            placement=layer_info.placement,
+                            attributes=attributes,
+                        )
+                    )
+                else:
+                    entity_id = _performance_group_entity_id(layer_index)
+                    child_ids = [
+                        _performance_layer_entity_id(layer_index, source_index)
+                        for source_index in range(len(source_locations))
+                    ]
+                    performance_group_child_kinds.add(_VELA_PERFORMANCE_LAYER_KIND)
+                    entities.append(
+                        schema.Entity(
+                            id=entity_id,
+                            kind=_VELA_PERFORMANCE_GROUP_KIND,
+                            name=display_name,
+                            child_ids=child_ids,
+                            placement=layer_info.placement,
+                            attributes={"layer_name": layer_info.name},
+                        )
+                    )
+                    entities.extend(
+                        schema.Entity(
+                            id=child_id,
+                            kind=_VELA_PERFORMANCE_LAYER_KIND,
+                            name=f"{display_name} ({source_location})",
+                            parent_ids=[entity_id],
+                            placement=layer_info.placement,
+                            attributes={
+                                "layer_name": layer_info.name,
+                                "vela_source_reference": source_location,
+                            },
+                        )
+                        for child_id, source_location in zip(
+                            child_ids, source_locations
+                        )
+                    )
             breakdowns.append(
                 schema.Breakdown(
                     entity_id=entity_id,
                     metrics=breakdown_metrics,
+                )
+            )
+
+        entity_kinds = []
+        if uses_performance_layer_entities:
+            entity_kinds.append(schema.EntityKind(id=_VELA_PERFORMANCE_LAYER_KIND))
+        if performance_group_child_kinds:
+            entity_kinds.append(
+                schema.EntityKind(
+                    id=_VELA_PERFORMANCE_GROUP_KIND,
+                    child_kinds=sorted(performance_group_child_kinds),
                 )
             )
 
@@ -544,11 +656,7 @@ class PerformanceMetrics:
             metrics=model_metrics,
             breakdowns=breakdowns,
             entities=entities,
-            entity_kinds=[
-                schema.EntityKind(
-                    id="performance_group", child_kinds=["source_operator"]
-                )
-            ],
+            entity_kinds=entity_kinds,
         )
 
         # Build StandardizedOutput
@@ -710,7 +818,7 @@ def parse_layerwise_perf_csv(
     if not vela_csv_file.is_file():
         raise FileNotFoundError(f"CSV File not found at {vela_csv_file}\n")
     debug_locations = (
-        _debug_db_performance_locations(debug_db_path)
+        _debug_db_performance_source_references(debug_db_path)
         if debug_db_path is not None
         else []
     )
@@ -782,6 +890,18 @@ def parse_layerwise_perf_csv(
     )
 
 
+def _find_per_layer_csv(output_dir: Path, model_name: str) -> Path | None:
+    """Return the model's generated per-layer CSV, if present."""
+    return next(
+        (
+            path
+            for path in sorted(output_dir.glob("*per-layer.csv"))
+            if model_name in path.name
+        ),
+        None,
+    )
+
+
 def estimate_performance(
     model_path: Path, compiler_options: VelaCompilerOptions
 ) -> PerformanceMetrics:
@@ -797,29 +917,23 @@ def estimate_performance(
     from mlia.backend.vela.compiler import VelaCompiler
 
     vela_compiler = VelaCompiler(compiler_options)
-    if Path(
-        Path(compiler_options.output_dir).as_posix()
-        + "/"
-        + model_path.stem
-        + "_summary_"
-        + compiler_options.system_config
-        + ".csv"
-    ).is_file():
-        summary_data, _ = vela_compiler.compile_model(model_path, True)
-    else:
-        summary_data, _ = vela_compiler.compile_model(model_path)
+    output_dir = Path(compiler_options.output_dir)
+    model_name = model_path.stem
+    summary_path = (
+        output_dir / f"{model_name}_summary_{compiler_options.system_config}.csv"
+    )
+    debug_db_path = output_dir / f"{model_name}_debug.xml"
+    cached_csv_path = _find_per_layer_csv(output_dir, model_name)
+    cache_is_complete = (
+        summary_path.is_file()
+        and debug_db_path.is_file()
+        and cached_csv_path is not None
+    )
+    summary_data, _ = vela_compiler.compile_model(model_path, cache_is_complete)
 
-    output_dir = compiler_options.output_dir
-    csv_paths = [entry for entry in os.listdir(output_dir) if "per-layer.csv" in entry]
-    model_name = str(model_path.stem)
-    csv_file_found = None
-    for path in csv_paths:
-        if model_name in path:
-            csv_file_found = path
-    if csv_file_found is None:
+    csv_path = _find_per_layer_csv(output_dir, model_name)
+    if csv_path is None:
         raise FileNotFoundError("Vela per-layer CSV file not found")
-    csv_path = Path(output_dir) / csv_file_found
-    debug_db_path = Path(output_dir) / f"{model_path.stem}_debug.xml"
     layerwise_performance_info = parse_layerwise_perf_csv(
         vela_csv_file=csv_path,
         metrics=layer_metrics,

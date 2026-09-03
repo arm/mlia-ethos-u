@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for module vela/performance."""
 
+import re
 import tempfile
 from dataclasses import replace
 from pathlib import Path
@@ -10,16 +11,6 @@ from typing import Any, TypedDict, get_type_hints
 from unittest.mock import MagicMock
 
 import pytest
-
-try:
-    import ethosu.vela  # noqa: F401
-except ImportError:
-    pytest.skip(
-        "All tests require ethosu.vela package to be installed", allow_module_level=True
-    )
-else:
-    # Only reference ethosu.vela if it was successfully imported
-    _ = ethosu.vela
 
 import mlia.backend.vela.compiler as vela_compiler_module  # noqa: E402
 import mlia.core.output_schema as schema
@@ -32,7 +23,7 @@ from mlia.backend.vela.performance import (
     LayerPerfInfo,  # noqa: E402
     LayerwisePerfInfo,  # noqa: E402
     PerformanceMetrics,  # noqa: E402
-    _debug_db_performance_locations,  # noqa: E402
+    _debug_db_performance_source_references,  # noqa: E402
     _summary_metrics,  # noqa: E402
     estimate_performance,  # noqa: E402
     layer_metrics,  # noqa: E402
@@ -75,16 +66,16 @@ class _FakeVelaCompiler:
         self.summary_data = summary_data
         self.compiled_model_path = compiled_model_path
         self.model_path: Path | None = None
-        self.force_regeneration: bool | None = None
+        self.already_compiled: bool | None = None
 
     def compile_model(
         self,
         model_path: Path,
-        force_regeneration: bool = False,
+        already_compiled: bool = False,
     ) -> tuple[VelaSummary, Path]:
         """Record the compile call and return the prepared summary data."""
         self.model_path = model_path
-        self.force_regeneration = force_regeneration
+        self.already_compiled = already_compiled
         return self.summary_data, self.compiled_model_path
 
 
@@ -392,8 +383,8 @@ def test_read_invalid_model(test_tflite_invalid_model: Path) -> None:
     with pytest.raises(
         Exception,
         match=(
-            f"Unable to read model {test_tflite_invalid_model}"
-            "|Model could not be optimized with Vela compiler"
+            re.escape(f"Unable to read model {test_tflite_invalid_model}")
+            + "|Model could not be optimized with Vela compiler"
         ),
     ):
         target_config = EthosUConfiguration.load_profile("ethos-u55-256")
@@ -697,6 +688,7 @@ def test_to_standardized_output(
         },
     ]
     assert results["entities"] == expected_entities
+    assert "entity_kinds" not in results
 
     expected_breakdowns: list[ExpectedBreakdown] = [
         {
@@ -826,6 +818,124 @@ def test_to_standardized_output(
             } == expected_metric
 
 
+def _write_tflite_model_with_subgraphs(model_path: Path, count: int) -> None:
+    """Write a minimal TFLite flatbuffer containing the requested subgraphs."""
+    import flatbuffers
+    from ethosu.vela.tflite.Model import (
+        ModelAddSubgraphs,
+        ModelAddVersion,
+        ModelEnd,
+        ModelStart,
+        ModelStartSubgraphsVector,
+    )
+    from ethosu.vela.tflite.SubGraph import SubGraphEnd, SubGraphStart
+
+    builder = flatbuffers.Builder(256)
+    subgraphs = []
+    for _ in range(count):
+        SubGraphStart(builder)
+        subgraphs.append(SubGraphEnd(builder))
+
+    ModelStartSubgraphsVector(builder, count)
+    for subgraph in reversed(subgraphs):
+        builder.PrependUOffsetTRelative(subgraph)
+    subgraphs_vector = builder.EndVector()
+
+    ModelStart(builder)
+    ModelAddVersion(builder, 3)
+    ModelAddSubgraphs(builder, subgraphs_vector)
+    model = ModelEnd(builder)
+    builder.Finish(model, file_identifier=b"TFL3")
+    model_path.write_bytes(bytes(builder.Output()))
+
+
+def test_multisubgraph_tflite_withholds_ambiguous_source_operator_links(
+    tmp_path: Path,
+) -> None:
+    """Repeated subgraph-local ext_key values must remain distinct Vela layers."""
+    model_path = tmp_path / "multi_subgraph.tflite"
+    _write_tflite_model_with_subgraphs(model_path, 2)
+    perf_metrics = _get_perf_metrics()
+    perf_metrics.layerwise_performance_info.layerwise_info[1].source_locations = [
+        "operator/0"
+    ]
+
+    output = perf_metrics.to_standardized_output(model_path)
+
+    result = output["results"][0]
+    entities = result["entities"]
+    assert [entity["id"] for entity in entities] == [
+        "vela_performance_layer/0",
+        "vela_performance_layer/1",
+    ]
+    assert all(entity["kind"] == "vela_performance_layer" for entity in entities)
+    assert all(entity["kind"] != "source_operator" for entity in entities)
+    assert [breakdown["entity_id"] for breakdown in result["breakdowns"]] == [
+        "vela_performance_layer/0",
+        "vela_performance_layer/1",
+    ]
+    assert result["entity_kinds"] == [{"id": "vela_performance_layer"}]
+    validate_standardized_output(output)
+
+
+def test_non_tflite_aggregate_uses_declared_vela_performance_entities(
+    tmp_path: Path,
+) -> None:
+    """Non-TFLite Vela references remain custom performance provenance."""
+    model_path = tmp_path / "model.tosa"
+    model_path.write_bytes(b"tosa")
+    perf_metrics = _get_perf_metrics()
+    layerwise = perf_metrics.layerwise_performance_info
+    layerwise.layerwise_info = layerwise.layerwise_info[:1]
+    layerwise.additional_layer_metrics = layerwise.additional_layer_metrics[:1]
+    layerwise.layerwise_info[0].source_locations = ["operator/0", "operator/1"]
+
+    output = perf_metrics.to_standardized_output(model_path)
+
+    result = output["results"][0]
+    entities = {entity["id"]: entity for entity in result["entities"]}
+    assert set(entities) == {
+        "vela_performance_group/0",
+        "vela_performance_layer/0/source/0",
+        "vela_performance_layer/0/source/1",
+    }
+    assert entities["vela_performance_group/0"]["child_ids"] == [
+        "vela_performance_layer/0/source/0",
+        "vela_performance_layer/0/source/1",
+    ]
+    assert {entity["kind"] for entity in entities.values()} == {
+        "vela_performance_group",
+        "vela_performance_layer",
+    }
+    assert all(entity["kind"] != "source_operator" for entity in entities.values())
+    assert result["entity_kinds"] == [
+        {"id": "vela_performance_layer"},
+        {
+            "id": "vela_performance_group",
+            "child_kinds": ["vela_performance_layer"],
+        },
+    ]
+    assert result["breakdowns"][0]["entity_id"] == "vela_performance_group/0"
+    validate_standardized_output(output)
+
+
+def test_missing_source_reference_uses_declared_vela_performance_layer(
+    test_tflite_model: Path,
+) -> None:
+    """A TFLite layer without ext_key provenance must not claim a source operator."""
+    perf_metrics = _get_perf_metrics()
+    perf_metrics.layerwise_performance_info.layerwise_info[0].source_locations = []
+
+    output = perf_metrics.to_standardized_output(test_tflite_model)
+
+    result = output["results"][0]
+    assert result["entities"][0]["id"] == "vela_performance_layer/0"
+    assert result["entities"][0]["kind"] == "vela_performance_layer"
+    assert result["breakdowns"][0]["entity_id"] == "vela_performance_layer/0"
+    assert result["entity_kinds"] == [{"id": "vela_performance_layer"}]
+    validate_standardized_output(output)
+
+
 def test_to_standardized_output_preserves_layer_placement(
     test_tflite_model: Path,
 ) -> None:
@@ -840,6 +950,45 @@ def test_to_standardized_output_preserves_layer_placement(
     entities = {entity["id"]: entity for entity in output["results"][0]["entities"]}
     assert entities["source_operator/operator/0"]["placement"] == "NPU"
     assert entities["source_operator/operator/1"]["placement"] == "CPU"
+
+
+def test_estimate_performance_regenerates_cache_without_debug_database(
+    monkeypatch: pytest.MonkeyPatch,
+    test_tflite_model: Path,
+    tmp_path: Path,
+) -> None:
+    """A summary-only cache should be regenerated before debug parsing."""
+    compiler_options = VelaCompilerOptions(
+        accelerator_config="ethos-u55-256",
+        output_dir=tmp_path,
+    )
+    summary_path = tmp_path / (
+        f"{test_tflite_model.stem}_summary_{compiler_options.system_config}.csv"
+    )
+    summary_path.touch()
+    (tmp_path / f"{test_tflite_model.stem}_per-layer.csv").touch()
+    fake_vela_compiler = _FakeVelaCompiler(
+        MagicMock(),
+        tmp_path / "compiled.tflite",
+    )
+    expected_metrics = MagicMock(spec=PerformanceMetrics)
+    monkeypatch.setattr(
+        "mlia.backend.vela.compiler.VelaCompiler",
+        lambda _compiler_options: fake_vela_compiler,
+    )
+    monkeypatch.setattr(
+        "mlia.backend.vela.performance.parse_layerwise_perf_csv",
+        MagicMock(return_value=LayerwisePerfInfo(layerwise_info=[])),
+    )
+    monkeypatch.setattr(
+        "mlia.backend.vela.performance._performance_metrics",
+        MagicMock(return_value=expected_metrics),
+    )
+
+    result = estimate_performance(test_tflite_model, compiler_options)
+
+    assert result is expected_metrics
+    assert fake_vela_compiler.already_compiled is False
 
 
 def test_performance_metrics_preserves_vela_summary_statistics(
@@ -905,10 +1054,11 @@ def test_performance_metrics_preserves_vela_summary_statistics(
     output = perf_metrics.to_standardized_output(test_tflite_model)
 
     assert fake_vela_compiler.model_path == test_tflite_model
-    assert fake_vela_compiler.force_regeneration is False
+    assert fake_vela_compiler.already_compiled is False
     mock_parse_layerwise_perf_csv.assert_called_once_with(
         vela_csv_file=per_layer_csv,
         metrics=layer_metrics,
+        debug_db_path=tmp_path / f"{test_tflite_model.stem}_debug.xml",
     )
     metrics = {metric["name"]: metric for metric in output["results"][0]["metrics"]}
     assert metrics["total_original_weights"] == {
@@ -988,8 +1138,8 @@ def test_non_finite_vela_summary_statistics_are_unavailable_or_omitted(
     assert "nn_tops" not in metrics
 
 
-def test_debug_db_performance_locations_use_source_ext_key(tmp_path: Path) -> None:
-    """Vela debug DB ext_key values provide canonical TFLite operator locations."""
+def test_debug_db_performance_references_use_source_ext_key(tmp_path: Path) -> None:
+    """Vela debug DB ext_key values are retained as source references."""
     debug_db = tmp_path / "model_debug.xml"
     debug_db.write_text(
         """<?xml version='1.0' encoding='UTF-8'?>
@@ -1007,7 +1157,7 @@ def test_debug_db_performance_locations_use_source_ext_key(tmp_path: Path) -> No
         encoding="utf-8",
     )
 
-    assert _debug_db_performance_locations(debug_db) == [
+    assert _debug_db_performance_source_references(debug_db) == [
         ["operator/7"],
         ["operator/68"],
     ]

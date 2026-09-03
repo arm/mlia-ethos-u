@@ -97,6 +97,7 @@ markers = [
 test = [
     "pytest~=9.0",
     "pytest-cov~=7.0",
+    "ethos-u-vela==5.1.0",
     "flaky~=3.8.1",
     "jsonschema~=4.26",
     "numpy==2.2.6",

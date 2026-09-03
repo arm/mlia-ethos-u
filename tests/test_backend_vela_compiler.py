@@ -13,19 +13,7 @@ from unittest.mock import MagicMock
 import pytest
 
 import mlia.backend.vela.compiler as vela_compiler_module  # noqa: E402
-
-
-try:
-    import ethosu.vela  # noqa: F401
-    from ethosu.vela.vela import main
-except ImportError:
-    pytest.skip(
-        "All tests require ethosu.vela package to be installed", allow_module_level=True
-    )
-else:
-    # Only reference ethosu.vela if it was successfully imported
-    _ = ethosu.vela
-
+from ethosu.vela.vela import main
 from mlia.backend.vela.compiler import (
     VelaCompiler,  # noqa: E402
     VelaCompilerOptions,  # noqa: E402
