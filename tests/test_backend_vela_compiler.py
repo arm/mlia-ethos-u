@@ -224,6 +224,25 @@ def test_compile_model(test_tflite_model: Path) -> None:
     assert expected_model_path == optimized_model_path
 
 
+def test_compile_model_reports_dependency_failure(
+    test_tflite_model: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Vela loading failure should not mask itself with an unbound variable."""
+    monkeypatch.setattr(
+        vela_compiler_module,
+        "_get_vela_deps",
+        MagicMock(side_effect=RuntimeError("Vela dependency failure")),
+    )
+    target_config = EthosUConfiguration.load_profile("ethos-u55-256")
+    assert target_config.compiler_options is not None
+    compiler = VelaCompiler(target_config.compiler_options)
+
+    with pytest.raises(
+        RuntimeError, match="Model could not be optimized with Vela compiler."
+    ):
+        compiler.compile_model(test_tflite_model)
+
+
 @pytest.mark.parametrize(
     "output_message, expected_err",
     [

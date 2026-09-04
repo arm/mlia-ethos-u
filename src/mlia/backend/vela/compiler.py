@@ -402,20 +402,23 @@ class VelaCompiler:
         Supports TFLite (.tflite), TOSA (.tosa), and PyTorch (.pt2) files.
         PyTorch files are automatically converted to TOSA before compilation.
         """
-        deps = _get_vela_deps()
-        processed_model_path = self._preprocess_model(model_path)
-
-        if not processed_model_path.is_file():
-            raise RuntimeError(
-                f"Unable to read model {processed_model_path} (original: {model_path})"
-            )
+        output_message = StringIO()
+        processed_model_path = model_path
 
         try:
+            deps = _get_vela_deps()
+            processed_model_path = self._preprocess_model(model_path)
+
+            if not processed_model_path.is_file():
+                raise RuntimeError(
+                    f"Unable to read model {processed_model_path} "
+                    f"(original: {model_path})"
+                )
+
             with redirect_raw_output(
                 logger, stdout_level=logging.DEBUG, stderr_level=logging.DEBUG
             ):
                 tmp = sys.stdout
-                output_message = StringIO()
                 sys.stdout = output_message
                 try:
                     is_tosa_input = (
