@@ -3,6 +3,7 @@
 
 site_name: MLIA Ethos-U
 site_description: Documentation for the MLIA Ethos-U target and backend plugin.
+site_url: https://arm.github.io/mlia-ethos-u/
 repo_url: https://github.com/arm/mlia-ethos-u
 repo_name: arm/mlia-ethos-u
 edit_uri: edit/main/docs/source/
