@@ -3,9 +3,8 @@
 
 [project]
 name = "mlia-ethos-u"
-dynamic = ["version"]
+dynamic = ["version", "readme"]
 description = "ML Inference Advisor Ethos Plugin"
-readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "mlia==0.12.2.dev25+af0dc45"
@@ -45,6 +44,9 @@ exclude = ["/.venv-*"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mlia"]
+
+[tool.hatch.metadata.hooks.custom]
+path = "hatch_build.py"
 
 [tool.hatch.version]
 source = "uv-dynamic-versioning"
@@ -95,6 +97,7 @@ markers = [
 
 [dependency-groups]
 test = [
+    "hatchling>=1.27.0",
     "pytest~=9.0",
     "pytest-cov~=7.0",
     "ethos-u-vela==5.1.0",
