@@ -25,24 +25,24 @@ repository root:
 
 ```bash
 uv sync --no-sources --no-install-project --only-group docs
-uv run mkdocs build --strict
+uv run --no-sync mkdocs build --strict
 ```
 
 For local preview:
 
 ```bash
-uv run mkdocs serve
+uv run --no-sync mkdocs serve
 ```
 
 The generated site will be written to `.mkdocs/site/`.
 
 ## Scope
 
-These docs focus on what now lives in the split `mlia-ethos-u` repo: the target
-plugin, bundled profiles, and backend integrations.
+These docs cover the Ethos-U target plugin, bundled profiles, and backend
+integrations provided by `mlia-ethos-u`.
 
 ## Relationship to the core repo
 
-Core CLI behaviour, shared output structure, and plugin-discovery concepts
-remain documented in the main `mlia` repo. Use this docs tree for Ethos-U-
-specific target, backend, metric, and troubleshooting detail.
+The main `mlia` repository documents shared CLI behaviour, output structure,
+and plugin discovery. Use this documentation for Ethos-U-specific target,
+backend, metric, and troubleshooting details.

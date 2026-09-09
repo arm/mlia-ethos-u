@@ -51,40 +51,40 @@ Additional formats can also participate in Ethos-U workflows:
 - PyTorch exported program (`.pt2`) when `mlia-converters-pytorch` is
   installed.
 
-Quantized LiteRT / TensorFlow Lite `.tflite` models are still the natural fit for Vela and for most
-day-to-day Ethos-U analysis. The `.pt2` and `.pte` paths are specifically tied
-to supported Corstone ExecuTorch AOT flows.
+Quantized LiteRT / TensorFlow Lite `.tflite` models are the standard input for
+Vela and most Ethos-U analysis. The `.pt2` and `.pte` paths apply to supported
+Corstone ExecuTorch AOT flows.
 
 ## Typical usage
 
 Check compatibility:
 
 ```bash
-mlia check model.tflite --target-profile ethos-u65-512 --compatibility
+mlia check my_model.tflite --target-profile ethos-u65-512 --compatibility
 ```
 
 Estimate performance with Vela:
 
 ```bash
-mlia check model.tflite --target-profile ethos-u55-256 --performance --backend vela
+mlia check my_model.tflite --target-profile ethos-u55-256 --performance --backend vela
 ```
 
 Run a more detailed performance flow with a Corstone backend:
 
 ```bash
-mlia check model.tflite --target-profile ethos-u65-512 --performance --backend corstone-310
+mlia check my_model.tflite --target-profile ethos-u65-512 --performance --backend corstone-310
 ```
 
 Run a supported ExecuTorch AOT flow through Corstone:
 
 ```bash
-mlia check model.pt2 --target-profile ethos-u55-256 --performance --backend corstone-300
+mlia check my_model.pt2 --target-profile ethos-u55-256 --performance --backend corstone-300
 ```
 
 You can also point the Corstone path at a prepared `.pte` artifact directly:
 
 ```bash
-mlia check model.pte --target-profile ethos-u85-256 --performance --backend corstone-320
+mlia check my_model.pte --target-profile ethos-u85-256 --performance --backend corstone-320
 ```
 
 ## Configuration concepts

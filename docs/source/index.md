@@ -19,3 +19,7 @@ ExecuTorch AOT runs through Corstone.
 - [CLI examples](cli.md)
 - [Troubleshooting](troubleshooting.md)
 - [Development](development.md)
+
+The [Ethos-U Python API walkthrough notebook](ethos_u_api_walkthrough.ipynb)
+is available as a download for interactive use. It is not part of the MkDocs
+navigation because the documentation build does not render notebooks.

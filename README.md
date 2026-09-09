@@ -26,6 +26,8 @@ The package is distributed as `mlia-ethos-u` and contributes:
 - [Common commands](#common-commands)
 - [Project layout](#project-layout)
 - [Documentation](#documentation)
+- [Releases](#releases)
+- [License](#license)
 - [Trademarks and copyrights](#trademarks-and-copyrights)
 
 ## Overview
@@ -88,22 +90,22 @@ A typical MLIA workflow then references one of the bundled profiles, for
 example:
 
 ```bash
-mlia check model.tflite --target-profile ethos-u55-256
+mlia check my_model.tflite --target-profile ethos-u55-256
 ```
 
 For supported ExecuTorch AOT flows, a PyTorch-originating run can look like:
 
 ```bash
-mlia check model.pt2 --target-profile ethos-u55-256 --performance --backend corstone-300
+mlia check my_model.pt2 --target-profile ethos-u55-256 --performance --backend corstone-300
 ```
 
 Direct `.pt2` support depends on `mlia-converters-pytorch`, and the current
 Corstone ExecuTorch path is only available for selected target and backend
 combinations.
 
-The required core MLIA version is defined in [`pyproject.toml`](pyproject.toml).
-This package is intended to be used as part of a wider MLIA installation rather
-than as a standalone CLI.
+The package depends on MLIA and is intended to be used as part of an MLIA
+installation rather than as a standalone CLI. See `pyproject.toml` for the
+current dependency constraint.
 
 ## Reporting bugs
 
@@ -170,6 +172,16 @@ uv build
 ## Documentation
 
 Additional package documentation lives in [docs/README.md](docs/README.md).
+
+## Releases
+
+Latest changes and release history can be found in
+[MLIA Ethos-U releases](https://github.com/arm/mlia-ethos-u/releases).
+
+## License
+
+This project is licensed under the Apache License 2.0. See the
+[license files](LICENSES/) for details.
 
 ## Trademarks and copyrights
 

@@ -64,7 +64,7 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - run: uv sync --no-sources --no-install-project --only-group docs
-      - run: uv run mkdocs build --strict --no-directory-urls
+      - run: uv run --no-sync mkdocs build --strict --no-directory-urls
       - name: Upload docs artifact
         uses: actions/upload-artifact@v6
         with:

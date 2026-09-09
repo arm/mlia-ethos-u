@@ -38,10 +38,12 @@ you return to when something needs explanation.
 The following abridged fragment focuses on result data and omits the required
 standardized-output envelope. Metrics are represented as objects in a list.
 Per-operator and per-layer metrics are stored in breakdowns linked to
-result-local entities:
+result-local entities
 
 ```json
 {
+  "schema_version": "1.1.0",
+  "target": {"profile_name": "ethos-u55-256", "target_type": "npu"},
   "backends": [{"id": "vela", "name": "Vela Compiler"}],
   "results": [
     {
@@ -84,15 +86,10 @@ result-local entities:
 }
 ```
 
-Vela and Corstone mark additive layer counters, such as cycles, accesses, and
-MAC counts, with `aggregation: "sum"`. Layer memory usage uses
-`aggregation: "max"`. Percentage metrics are descriptive and do not declare an
-aggregation policy.
-
-Vela omits non-finite backend values such as `NaN`, which cannot be represented
-in strict JSON. When a standardized metric is unavailable, the output contains
-an explicit unavailable metric entry where the shared schema supports one;
-backend-specific optional metrics may simply be absent.
+The complete document also includes run, tool, model, context, entity, advice,
+warning, and breakdown fields where applicable. Treat metric names as data:
+find the object whose `name` matches the metric you need instead of relying on
+array order.
 
 ## What to read first in a Vela run
 
@@ -117,6 +114,24 @@ Common Vela metrics include:
 - Additional Vela summary statistics such as encoded weights or total bytes
   when Vela reports them.
 - Per-operator cycle and utilisation data.
+
+Vela omits optional summary metrics that it reports as `NaN` or infinity so
+that the output remains valid JSON. Required standardized metrics use
+`"availability": "unavailable"` with a reason when their value cannot be
+derived.
+
+### Layer aggregation
+
+Layer breakdown metrics can include an `aggregation` field that defines how to
+combine values across layers:
+
+- `sum` applies to additive work and traffic metrics such as cycles, MAC count,
+  and transferred bytes.
+- `max` applies to peak or high-water-mark metrics such as SRAM usage.
+- Metrics without an aggregation policy should not be combined automatically.
+
+These policies describe how to roll up breakdown values; they do not change the
+model-level metrics already reported in `results[].metrics`.
 
 ### What Vela numbers help you decide
 
@@ -180,7 +195,7 @@ troubleshooting problem before drawing performance conclusions.
 
 ## Cross-links
 
-- See [backends.md](backends.md) for choosing between Vela and Corstone.
-- See [cli.md](cli.md) for commands that produce these results.
-- See [troubleshooting.md](troubleshooting.md) if output is missing,
+- See [backends](backends.md) for choosing between Vela and Corstone variants.
+- See the [CLI guide](cli.md) for commands that produce these results.
+- See [troubleshooting](troubleshooting.md) if output is missing,
   incomplete, or surprising.

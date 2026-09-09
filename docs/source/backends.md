@@ -10,7 +10,7 @@ Use this page when you are deciding which Ethos-U backend to run for a model and
 | Backend | Use it when you want | Typical next step |
 | --- | --- | --- |
 | `vela` | The fastest answer about compatibility, estimated cycles, and memory pressure | Decide whether the model is worth iterating further |
-| `corstone-300`, `corstone-310`, or `corstone-320` | A deeper platform-oriented view of where time is going | Select the backend compatible with the target and investigate results that need more detail |
+| `corstone-300`, `corstone-310`, `corstone-320` | A deeper platform-oriented view of where time is going | Validate or investigate results that need more detail |
 
 ## Choosing between backends
 
@@ -18,10 +18,11 @@ If you are still deciding whether the model is a good fit for the selected
 Ethos-U target, start with `vela`.
 
 If the model already looks promising and you need deeper evidence about runtime
-behaviour, move to a target-compatible Corstone backend.
+behaviour, move to a supported Corstone backend.
 
 If you are unsure, the practical default is simple: use `vela` first, then only
-bring in Corstone when you need more detail than the fast estimate gives you.
+bring in a supported Corstone backend when you need more detail than the fast
+estimate gives you.
 
 ## Vela backend
 
@@ -37,13 +38,13 @@ bring in Corstone when you need more detail than the fast estimate gives you.
 Use compatibility first when support is the main concern:
 
 ```bash
-mlia check model.tflite --target-profile ethos-u55-256 --compatibility --backend vela
+mlia check my_model.tflite --target-profile ethos-u55-256 --compatibility --backend vela
 ```
 
 Use performance when you want a quick estimate and machine-readable output:
 
 ```bash
-mlia check model.tflite --target-profile ethos-u65-512 --performance --backend vela --json
+mlia check my_model.tflite --target-profile ethos-u65-512 --performance --backend vela --json
 ```
 
 ### Vela backend: what to look at in the result
@@ -70,8 +71,7 @@ expensive layers.
 ## Corstone backend
 
 A target-compatible Corstone backend is the path to use when you need a fuller
-answer to questions
-like:
+answer to questions like:
 
 - Why does the run still look expensive after the quick estimate?
 - Where is the system spending time beyond the top-level estimate?
@@ -85,20 +85,20 @@ like:
 Run Corstone directly when you already know you want the deeper path:
 
 ```bash
-mlia check model.tflite --target-profile ethos-u65-512 --performance --backend corstone-310
+mlia check my_model.tflite --target-profile ethos-u65-512 --performance --backend corstone-310
 ```
 
 Run a supported ExecuTorch AOT path through Corstone:
 
 ```bash
-mlia check model.pt2 --target-profile ethos-u55-256 --performance --backend corstone-300
+mlia check my_model.pt2 --target-profile ethos-u55-256 --performance --backend corstone-300
 ```
 
 Run both backends together when you want to compare the quick estimate with the
 more detailed path:
 
 ```bash
-mlia check model.tflite --target-profile ethos-u65-512 --performance --backend vela --backend corstone-310
+mlia check my_model.tflite --target-profile ethos-u65-512 --performance --backend vela --backend corstone-310
 ```
 
 ### Corstone backend: what to look at in the result
@@ -129,13 +129,12 @@ A useful Ethos-U workflow is:
 1. Start with `vela`.
 2. Check whether the result is mainly about compatibility, memory, or a few
    expensive operators.
-3. Bring in a target-compatible Corstone backend if the answer still needs more
-   detail.
+3. Bring in a  target-compatible Corstone backend if the answer still needs more detail.
 4. Compare the two results to decide what to change next.
 
 ## Cross-links
 
 - See [cli.md](cli.md) for Ethos-U command patterns.
-- See [outputs_metrics.md](outputs_metrics.md) for how to interpret the numbers.
+- See [outputs and metrics](outputs_metrics.md) for how to interpret the numbers.
 - See [troubleshooting.md](troubleshooting.md) when the issue is setup or run
   behaviour rather than backend choice.

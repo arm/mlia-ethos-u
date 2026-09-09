@@ -14,7 +14,7 @@ A sensible first sequence is:
 1. List what is installed with `mlia target list` and `mlia backend list`.
 2. Run one compatibility command.
 3. Run one performance command with `vela`.
-4. Only then add a target-compatible Corstone backend or `--json`.
+4. Only then add a  target-compatible Corstone backend or `--json`.
 
 ## Compatibility
 
@@ -22,13 +22,13 @@ Use compatibility when the first question is whether the model can map cleanly
 to the selected Ethos-U target profile.
 
 ```bash
-mlia check model.tflite --target-profile ethos-u55-256 --compatibility
+mlia check my_model.tflite --target-profile ethos-u55-256 --compatibility
 ```
 
 If you want to make the backend path explicit during investigation, add Vela:
 
 ```bash
-mlia check model.tflite \
+mlia check my_model.tflite \
   --target-profile ethos-u65-512 \
   --compatibility \
   --backend vela
@@ -39,7 +39,7 @@ mlia check model.tflite \
 For most day-to-day work, start with `vela`:
 
 ```bash
-mlia check model.tflite \
+mlia check my_model.tflite \
   --target-profile ethos-u55-256 \
   --performance \
   --backend vela
@@ -50,11 +50,11 @@ promising and where the main cost seems to be.
 
 ## Deeper performance investigation
 
-Use a target-compatible Corstone backend when you want more detail than the
-quick estimate gives you. For example, Ethos-U65 supports `corstone-310`:
+Use a  target-compatible Corstone backend when you want more detail than the quick
+estimate gives you:
 
 ```bash
-mlia check model.tflite \
+mlia check my_model.tflite \
   --target-profile ethos-u65-512 \
   --performance \
   --backend corstone-310
@@ -64,7 +64,7 @@ If you are trying to decide whether the deeper path changes your view of the
 model, run both backends in one invocation:
 
 ```bash
-mlia check model.tflite \
+mlia check my_model.tflite \
   --target-profile ethos-u65-512 \
   --performance \
   --backend vela \
@@ -78,7 +78,7 @@ The Corstone path can also run supported ExecuTorch workloads. If
 convert it to `.pte` before running the Corstone backend:
 
 ```bash
-mlia check model.pt2 \
+mlia check my_model.pt2 \
   --target-profile ethos-u55-256 \
   --performance \
   --backend corstone-300
@@ -87,7 +87,7 @@ mlia check model.pt2 \
 If you already have a prepared `.pte` artifact, you can run it directly:
 
 ```bash
-mlia check model.pte \
+mlia check my_model.pte \
   --target-profile ethos-u85-256 \
   --performance \
   --backend corstone-320
@@ -103,7 +103,7 @@ Use `--json` when you want to save results, compare runs, or inspect output more
 carefully later.
 
 ```bash
-mlia check model.tflite \
+mlia check my_model.tflite \
   --target-profile ethos-u55-256 \
   --performance \
   --backend vela \
@@ -117,15 +117,16 @@ If the result is not making sense, try this sequence:
 1. Rerun with one explicit backend at a time.
 2. Start with compatibility if unsupported mapping looks likely.
 3. Compare the top-level cycle counts before reading deeper detail.
-4. Use Corstone only after you know what the quick estimate is telling you.
+4. Use a Corstone backend only after you know what the quick estimate is
+   telling you.
 
 ## Quick rules of thumb
 
 - Use `--compatibility` first if you suspect unsupported operators.
 - Use `--backend vela` first if you want the fastest useful answer.
-- Use a target-compatible Corstone backend such as `corstone-300`,
-  `corstone-310`, or `corstone-320` when you need deeper evidence before
-  deciding what to change.
+- Use a target-compatible Corstone backend such as `--backend corstone-300`,
+  `--backend corstone-310`, or `--backend corstone-320` when you need deeper
+  evidence before deciding what to change.
 - Use `.pt2` or `.pte` with Corstone only when you are explicitly exercising
   the ExecuTorch AOT path.
 - Use `--json` when the result is something you expect to compare or archive.
