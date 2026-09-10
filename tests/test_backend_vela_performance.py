@@ -291,6 +291,56 @@ def test_parse_layerwise_csv_populates_fields_correctly(
     ]
 
 
+def test_parse_layerwise_csv_repeated_header_preserves_debug_row_mapping(
+    test_csv_file: Path,
+    tmp_path: Path,
+) -> None:
+    """Repeated headers must not consume Vela debug provenance rows."""
+    test_csv_file.write_text(LAYERWISE_MULTI_HEADER_TMP_DATA_STR, encoding="utf-8")
+    debug_db = tmp_path / "model_debug.xml"
+    debug_db.write_text(
+        """<?xml version='1.0' encoding='UTF-8'?>
+<debug source="model.tflite" optimised="model_vela.tflite">
+  <table name='source'><![CDATA["id","operator","kernel_w","kernel_h","ofm_w","ofm_h","ofm_d","ext_key"
+0,"Conv2D",1,1,1,1,1,7
+1,"MaxPool",1,1,1,1,1,68
+]]></table>
+  <table name='perf'><![CDATA["source_id","name"
+0,"npu layer"
+1,"cpu fallback layer"
+]]></table>
+</debug>
+""",
+        encoding="utf-8",
+    )
+
+    layerwise = parse_layerwise_perf_csv(
+        test_csv_file,
+        layer_metrics,
+        debug_db_path=debug_db,
+    )
+
+    assert [layer.source_locations for layer in layerwise.layerwise_info] == [
+        ["operator/7"],
+        ["operator/68"],
+    ]
+    assert [
+        {metric.name: metric.value for metric in metrics}
+        for metrics in layerwise.additional_layer_metrics
+    ] == [
+        {
+            "peak_sram_usage_percentage": 54.65201465201465,
+            "op_cycles_network_percentage": 17.648194632168373,
+            "mac_count_network_percentage": 8.653353814644136,
+        },
+        {
+            "peak_sram_usage_percentage": 50.10989010989011,
+            "op_cycles_network_percentage": 7.22147132651091,
+            "mac_count_network_percentage": 0.819252432155658,
+        },
+    ]
+
+
 def test_parse_layerwise_csv_omits_absent_optional_metrics(
     test_csv_file: Path,
 ) -> None:
@@ -991,6 +1041,26 @@ def test_estimate_performance_regenerates_cache_without_debug_database(
     assert fake_vela_compiler.already_compiled is False
 
 
+def test_to_standardized_output_uses_performance_entity_without_source_location(
+    test_tflite_model: Path,
+) -> None:
+    """An unmappable Vela layer remains available as a performance entity."""
+    perf_metrics = _get_perf_metrics()
+    perf_metrics.layerwise_performance_info.layerwise_info[0].source_locations = []
+
+    output = perf_metrics.to_standardized_output(test_tflite_model)
+
+    result = output["results"][0]
+    assert [entity["id"] for entity in result["entities"]] == [
+        "vela_performance_layer/0",
+        "source_operator/operator/1",
+    ]
+    assert [breakdown["entity_id"] for breakdown in result["breakdowns"]] == [
+        "vela_performance_layer/0",
+        "source_operator/operator/1",
+    ]
+
+
 def test_performance_metrics_preserves_vela_summary_statistics(
     monkeypatch: pytest.MonkeyPatch,
     test_tflite_model: Path,
@@ -1159,6 +1229,39 @@ def test_debug_db_performance_references_use_source_ext_key(tmp_path: Path) -> N
 
     assert _debug_db_performance_source_references(debug_db) == [
         ["operator/7"],
+        ["operator/68"],
+    ]
+
+
+def test_debug_db_performance_references_preserve_unmappable_rows(
+    tmp_path: Path,
+) -> None:
+    """Missing, empty, and sentinel ext_key values preserve performance alignment."""
+    debug_db = tmp_path / "model_debug.xml"
+    debug_db.write_text(
+        """<?xml version='1.0' encoding='UTF-8'?>
+<debug source="model.tflite" optimised="model_vela.tflite">
+  <table name='source'><![CDATA["id","operator","kernel_w","kernel_h","ofm_w","ofm_h","ofm_d","ext_key"
+0,"Conv2D",1,1,1,1,1
+1,"Relu",1,1,1,1,1,
+2,"Reshape",1,1,1,1,1,-1
+3,"Softmax",1,1,1,1,1,68
+]]></table>
+  <table name='perf'><![CDATA["source_id","name"
+0,"missing ext key"
+1,"empty ext key"
+2,"sentinel ext key"
+3,"mapped ext key"
+]]></table>
+</debug>
+""",
+        encoding="utf-8",
+    )
+
+    assert _debug_db_performance_source_references(debug_db) == [
+        [],
+        [],
+        [],
         ["operator/68"],
     ]
 

@@ -9,12 +9,12 @@ import io
 import logging
 import math
 import xml.etree.ElementTree as ET
-from collections import Counter
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from mlia.backend.errors import BackendUnavailableError
+from mlia.backend.vela.per_layer import read_per_layer_csv_rows
 
 if TYPE_CHECKING:
     from mlia.backend.vela.compiler import VelaCompilerOptions, VelaSummary
@@ -711,7 +711,11 @@ complete_layer_metrics = [
     ("sram_usage", ["SRAM Usage", "Staging Usage"], "SRAM Usage"),
     ("peak_sram_usage_percentage", "Peak%", "Peak SRAM Usage (%)"),
     ("op_cycles", "Op Cycles", "OP Cycles"),
-    ("op_cycles_network_percentage", "Network%", "OP Cycles in Network (%)"),
+    (
+        "op_cycles_network_percentage",
+        ["Network%", "Network% (cycles)"],
+        "OP Cycles in Network (%)",
+    ),
     ("npu_cycles", "NPU", "NPU Cycles"),
     ("sram_access_cycles", "SRAM AC", "SRAM AC"),
     ("dram_access_cycles", "DRAM AC", "DRAM AC"),
@@ -829,27 +833,7 @@ def parse_layerwise_perf_csv(
     layerwise_info = []  # type: list[LayerPerfInfo]
     additional_layer_metrics = []  # type: list[list[schema.Metric]]
     with open(vela_csv_file, encoding="UTF-8") as csv_file:
-        layerwise_reader = csv.reader(csv_file, delimiter=",")
-        try:
-            headers = list(next(layerwise_reader))
-        except StopIteration:
-            return LayerwisePerfInfo(layerwise_info=layerwise_info)
-        headers_to_check_cpu_ops = headers.copy()
-        multiple_header_count = Counter(headers)
-        # Deal with multiple of the same values in CSV header.
-        for idx, header in enumerate(reversed(headers)):
-            if multiple_header_count[header] > 1:
-                headers[len(headers) - idx - 1] = (
-                    headers[len(headers) - idx - 1]
-                    + " ("
-                    + str(multiple_header_count[header] - 1)
-                    + ")"
-                )
-                multiple_header_count[header] -= 1
-        for row in layerwise_reader:
-            row_as_dict = dict(zip(headers, row))
-            if row == headers_to_check_cpu_ops:
-                continue
+        for row_as_dict in read_per_layer_csv_rows(csv_file):
             try:
                 key_types = {
                     field.name: eval(field.type)  # type: ignore[arg-type]

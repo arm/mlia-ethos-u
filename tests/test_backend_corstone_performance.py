@@ -113,24 +113,15 @@ def mock_mlia_resources(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def test_generic_inference_output_parser_success(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Test successful generic inference output parsing."""
+def test_generic_inference_output_parser_success(tmp_path: Path) -> None:
+    """Parse model-wide FVP metrics without consuming Vela per-layer output."""
+    (tmp_path / "model_per-layer.csv").write_text("not,csv\ninvalid", encoding="utf-8")
     output_parser = GenericInferenceOutputParser()
-    monkeypatch.setattr(
-        "mlia.backend.corstone.performance._parse_per_layer_csv",
-        MagicMock(return_value=[{"operator": "op", "cycles": 1000}]),
-    )
-    per_layer_file = tmp_path / "model_per-layer.csv"
-    per_layer_file.touch()
     for line in valid_fvp_output():
         output_parser(line)
 
     assert output_parser.get_metrics(tmp_path) == CorstonePerformanceMetrics(
-        CorstoneModelPerformanceMetrics(1, 2, 3, 4, 5, 6),
-        [{"operator": "op", "cycles": 1000}],
+        CorstoneModelPerformanceMetrics(1, 2, 3, 4, 5, 6)
     )
 
 
@@ -164,57 +155,6 @@ def test_generic_inference_output_parser_rejects_negative_model_counter(
         output_parser(line)
 
     with pytest.raises(ValueError, match="negative npu_active_cycles"):
-        output_parser.get_metrics(tmp_path)
-
-
-def test_generic_inference_output_parser_rejects_negative_per_layer_counter(
-    tmp_path: Path,
-) -> None:
-    """Negative per-layer counters should fail before collection returns metrics."""
-    per_layer_file = tmp_path / "model_per-layer.csv"
-    per_layer_file.write_text(
-        "NNG Operator,Name,Staging Usage,Op Cycles\nop,op_name,128,-1\n",
-        encoding="utf-8",
-    )
-    output_parser = GenericInferenceOutputParser()
-    for line in valid_fvp_output():
-        output_parser(line)
-
-    with pytest.raises(ValueError, match="negative operation cycles"):
-        output_parser.get_metrics(tmp_path)
-
-
-def test_generic_inference_output_parser_rejects_negative_per_layer_memory(
-    tmp_path: Path,
-) -> None:
-    """Negative per-layer memory usage should fail before collection returns metrics."""
-    per_layer_file = tmp_path / "model_per-layer.csv"
-    per_layer_file.write_text(
-        "NNG Operator,Name,Staging Usage,Op Cycles\nop,op_name,-128,1\n",
-        encoding="utf-8",
-    )
-    output_parser = GenericInferenceOutputParser()
-    for line in valid_fvp_output():
-        output_parser(line)
-
-    with pytest.raises(ValueError, match="negative memory usage"):
-        output_parser.get_metrics(tmp_path)
-
-
-def test_generic_inference_output_parser_rejects_non_numeric_per_layer_metric(
-    tmp_path: Path,
-) -> None:
-    """Non-numeric per-layer metrics should fail before collection returns metrics."""
-    per_layer_file = tmp_path / "model_per-layer.csv"
-    per_layer_file.write_text(
-        "NNG Operator,Name,NPU\nop,op_name,unknown\n",
-        encoding="utf-8",
-    )
-    output_parser = GenericInferenceOutputParser()
-    for line in valid_fvp_output():
-        output_parser(line)
-
-    with pytest.raises(ValueError, match="non-numeric metric.*NPU"):
         output_parser.get_metrics(tmp_path)
 
 
@@ -528,13 +468,10 @@ def test_get_metrics_pte_parse_failure_is_wrapped(
 
 
 @pytest.mark.parametrize(
-    "target, per_layer_csv, model_metrics, expected_model_stats, expected_per_layer",
+    ("target", "model_metrics", "expected_model_stats"),
     [
         (
             "default",
-            """TFLite_operator,NNG Operator,SRAM Usage,Peak%,Op Cycles,Network%,NPU,SRAM AC,DRAM AC,OnFlash AC,OffFlash AC,MAC Count,Network%,Util%,Name
-CONV_2D,Conv2DBias,100,50,200,10,200,50,10,5,0,1000,20,40,loc0
-CONV_2D,Conv2DBias,120,60,250,15,250,60,15,8,0,1200,25,45,loc1""",  # noqa: E501
             {
                 "NPU IDLE": 100,
                 "NPU AXI0_RD_DATA_BEAT_RECEIVED": 200,
@@ -552,46 +489,9 @@ CONV_2D,Conv2DBias,120,60,250,15,250,60,15,8,0,1200,25,45,loc1""",  # noqa: E501
                 npu_axi1_rd_data_beat_received=180,
                 npu_axi1_wr_data_beat_written=None,
             ),
-            [
-                {
-                    "TFLite_operator": "CONV_2D",
-                    "NNG Operator": "Conv2DBias",
-                    "SRAM Usage": "100",
-                    "Peak%": "50",
-                    "Op Cycles": "200",
-                    "Network%": "20",
-                    "NPU": "200",
-                    "SRAM AC": "50",
-                    "DRAM AC": "10",
-                    "OnFlash AC": "5",
-                    "OffFlash AC": "0",
-                    "MAC Count": "1000",
-                    "Util%": "40",
-                    "Name": "loc0",
-                },
-                {
-                    "TFLite_operator": "CONV_2D",
-                    "NNG Operator": "Conv2DBias",
-                    "SRAM Usage": "120",
-                    "Peak%": "60",
-                    "Op Cycles": "250",
-                    "Network%": "25",
-                    "NPU": "250",
-                    "SRAM AC": "60",
-                    "DRAM AC": "15",
-                    "OnFlash AC": "8",
-                    "OffFlash AC": "0",
-                    "MAC Count": "1200",
-                    "Util%": "45",
-                    "Name": "loc1",
-                },
-            ],
         ),
         (
             "corstone-320",
-            """Original Operator,NNG Operator,Target,Staging Usage,Peak% (Staging),Op Cycles,Network% (cycles),NPU,SRAM AC,DRAM AC,OnFlash AC,OffFlash AC,MAC Count,Network% (MAC),Util% (MAC),Name
-Conv2D,Conv2D,NPU,150,40,300,30,300,70,20,0,0,1500,18,35,loc0
-Conv2D,Relu,NPU,180,50,400,35,400,80,25,0,0,2000,22,42,loc1""",  # noqa: E501
             {
                 "NPU ACTIVE": 2000,
                 "NPU ETHOSU_PMU_SRAM_RD_DATA_BEAT_RECEIVED": 250,
@@ -610,72 +510,18 @@ Conv2D,Relu,NPU,180,50,400,35,400,80,25,0,0,2000,22,42,loc1""",  # noqa: E501
                 npu_axi1_rd_data_beat_received=300,
                 npu_axi1_wr_data_beat_written=80,
             ),
-            [
-                {
-                    "Original Operator": "Conv2D",
-                    "NNG Operator": "Conv2D",
-                    "Target": "NPU",
-                    "Staging Usage": "150",
-                    "Peak% (Staging)": "40",
-                    "Op Cycles": "300",
-                    "Network% (cycles)": "30",
-                    "NPU": "300",
-                    "SRAM AC": "70",
-                    "DRAM AC": "20",
-                    "OnFlash AC": "0",
-                    "OffFlash AC": "0",
-                    "MAC Count": "1500",
-                    "Network% (MAC)": "18",
-                    "Util% (MAC)": "35",
-                    "Name": "loc0",
-                },
-                {
-                    "Original Operator": "Conv2D",
-                    "NNG Operator": "Relu",
-                    "Target": "NPU",
-                    "Staging Usage": "180",
-                    "Peak% (Staging)": "50",
-                    "Op Cycles": "400",
-                    "Network% (cycles)": "35",
-                    "NPU": "400",
-                    "SRAM AC": "80",
-                    "DRAM AC": "25",
-                    "OnFlash AC": "0",
-                    "OffFlash AC": "0",
-                    "MAC Count": "2000",
-                    "Network% (MAC)": "22",
-                    "Util% (MAC)": "42",
-                    "Name": "loc1",
-                },
-            ],
         ),
     ],
 )
 def test_build_metrics_from_fvp_output(
     target: str,
-    per_layer_csv: str,
     model_metrics: dict[str, int],
     expected_model_stats: CorstoneModelPerformanceMetrics,
-    expected_per_layer: list[dict[str, str]],
-    tmp_path: Path,
 ) -> None:
-    """Test from_fvp_out method."""
-    per_layer_file = tmp_path / "per-layer.csv"
-    with open(per_layer_file, "w", encoding="utf-8") as file:
-        file.write(per_layer_csv)
+    """Build only model-wide performance metrics from FVP output."""
+    perf_metrics = CorstonePerformanceMetrics.from_fvp_out(target, model_metrics)
 
-    perf_metrics = CorstonePerformanceMetrics.from_fvp_out(
-        target, model_metrics, per_layer_file
-    )
-    model_stats = perf_metrics.npu_model_stats
-    per_layer_stats = perf_metrics.npu_per_layer_stats
-
-    # Verify model_stats match expected values
-    assert model_stats == expected_model_stats
-
-    # Verify layer_stats are correctly parsed from CSV
-    assert len(per_layer_stats) == 2
-    assert per_layer_stats == expected_per_layer
+    assert perf_metrics.npu_model_stats == expected_model_stats
 
 
 def test_corstone_model_performance_metrics_missing_metric() -> None:
@@ -699,13 +545,6 @@ def test_estimate_performance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
         lambda: mock_repository,
     )
 
-    monkeypatch.setattr(
-        "mlia.backend.corstone.performance._parse_per_layer_csv",
-        MagicMock(return_value=[{"operator": "op", "cycles": 1000}]),
-    )
-    per_layer_file = tmp_path / "model_per-layer.csv"
-    per_layer_file.touch()
-
     def command_output_mock(_command: Command) -> Generator[str, None, None]:
         """Mock FVP output."""
         yield from valid_fvp_output()
@@ -716,8 +555,7 @@ def test_estimate_performance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
         "ethos-u55", 256, Path("model.tflite"), "corstone-300", tmp_path
     )
     assert result == CorstonePerformanceMetrics(
-        CorstoneModelPerformanceMetrics(1, 2, 3, 4, 5, 6),
-        [{"operator": "op", "cycles": 1000}],
+        CorstoneModelPerformanceMetrics(1, 2, 3, 4, 5, 6)
     )
 
     mock_repository.get_backend_settings.assert_called_once()
@@ -772,23 +610,7 @@ def test_performance_metrics_to_standardized_output(
             npu_axi0_wr_data_beat_written=100,
             npu_axi1_rd_data_beat_received=150,
             npu_axi1_wr_data_beat_written=75,
-        ),
-        [
-            {
-                "NNG Operator": "op",
-                "Name": "op_name",
-                "NPU": 1000,
-                "Staging Usage": "150",
-                "Op Cycles": "300",
-            },
-            {
-                "NNG Operator": "op2",
-                "Name": "op2_name",
-                "NPU": 500,
-                "Staging Usage": "180",
-                "Op Cycles": "100",
-            },
-        ],
+        )
     )
 
     # Create a model file for hash computation
@@ -837,22 +659,16 @@ def test_performance_metrics_to_standardized_output(
         "value": pytest.approx(1000 / 1500 * 100),
         "unit": schema.UNIT_PERCENT,
     }
-    assert metrics_dict[schema.METRIC_NAME_PEAK_ACTIVATION_MEMORY] == {
-        "name": schema.METRIC_NAME_PEAK_ACTIVATION_MEMORY,
-        "value": 180.0,
-        "unit": schema.UNIT_BYTES,
-    }
-    assert metrics_dict[schema.METRIC_NAME_AVERAGE_MEMORY] == {
-        "name": schema.METRIC_NAME_AVERAGE_MEMORY,
-        "value": pytest.approx(((150 * 300) + (180 * 100)) / (300 + 100)),
-        "unit": schema.UNIT_BYTES,
-    }
-    assert metrics_dict[schema.METRIC_NAME_MODEL_WEIGHT_MEMORY] == {
-        "name": schema.METRIC_NAME_MODEL_WEIGHT_MEMORY,
-        "unit": schema.UNIT_BYTES,
-        "availability": "unavailable",
-        "reason": "Model weight memory data is not available.",
-    }
+    for metric_name in (
+        schema.METRIC_NAME_MODEL_WEIGHT_MEMORY,
+        schema.METRIC_NAME_PEAK_ACTIVATION_MEMORY,
+        schema.METRIC_NAME_AVERAGE_MEMORY,
+    ):
+        metric = metrics_dict[metric_name]
+        assert metric["unit"] == schema.UNIT_BYTES
+        assert metric["availability"] == "unavailable"
+        assert "value" not in metric
+        assert metric["reason"]
     for metric_name, unit in (
         (schema.METRIC_NAME_ACCELERATOR_OPERATOR_PERCENTAGE, schema.UNIT_PERCENT),
         (schema.METRIC_NAME_INFERENCES_PER_SECOND, schema.UNIT_INFERENCES_PER_SECOND),
@@ -864,34 +680,8 @@ def test_performance_metrics_to_standardized_output(
         assert "value" not in metric
         assert metric["reason"]
 
-    assert result["entities"][0] == {
-        "id": "source_operator/op_name",
-        "kind": "source_operator",
-        "name": "op",
-        "placement": "NPU",
-    }
-    breakdown = result["breakdowns"][0]
-    assert breakdown["entity_id"] == "source_operator/op_name"
-    assert breakdown["metrics"] == [
-        {
-            "name": "npu",
-            "value": 1000.0,
-            "unit": "cycles",
-            "aggregation": "sum",
-        },
-        {
-            "name": "staging_usage",
-            "value": 150.0,
-            "unit": "bytes",
-            "aggregation": "max",
-        },
-        {
-            "name": "op_cycles",
-            "value": 300.0,
-            "unit": "cycles",
-            "aggregation": "sum",
-        },
-    ]
+    assert "entities" not in result
+    assert "breakdowns" not in result
 
 
 @pytest.mark.parametrize(
@@ -1003,7 +793,7 @@ def test_performance_metrics_emits_corstone_model_counters(
     tmp_path: Path,
 ) -> None:
     """Corstone model-level FVP counters should remain integer JSON values."""
-    perf_metrics = CorstonePerformanceMetrics(model_stats, [])
+    perf_metrics = CorstonePerformanceMetrics(model_stats)
     model_file = tmp_path / "model.tflite"
     model_file.write_bytes(b"test model content")
 
@@ -1026,109 +816,6 @@ def test_performance_metrics_emits_corstone_model_counters(
     }
 
 
-def test_performance_metrics_preserves_supported_corstone_layer_statistics(
-    tmp_path: Path,
-) -> None:
-    """Supported numeric Corstone per-layer CSV fields should become metrics."""
-    perf_metrics = CorstonePerformanceMetrics(
-        CorstoneModelPerformanceMetrics(
-            npu_active_cycles=1000,
-            npu_idle_cycles=500,
-            npu_total_cycles=1500,
-            npu_axi0_rd_data_beat_received=200,
-            npu_axi0_wr_data_beat_written=100,
-            npu_axi1_rd_data_beat_received=150,
-            npu_axi1_wr_data_beat_written=None,
-        ),
-        [
-            {
-                "Original Operator": "Conv2D",
-                "NNG Operator": "Conv2DBias",
-                "Target": "NPU",
-                "Staging Usage": "150",
-                "Peak% (Staging)": "40",
-                "Op Cycles": "300",
-                "Network% (cycles)": "30",
-                "NPU": "300",
-                "SRAM AC": "70",
-                "DRAM AC": "20",
-                "OnFlash AC": "0",
-                "OffFlash AC": "0",
-                "MAC Count": "1500",
-                "Network% (MAC)": "18",
-                "Util% (MAC)": "35",
-                "SRAM Usage": "160",
-                "Peak%": "50",
-                "Network%": "32",
-                "Util%": "36",
-                "Name": "loc0",
-            }
-        ],
-    )
-    model_file = tmp_path / "model.tflite"
-    model_file.write_bytes(b"test model content")
-
-    output = perf_metrics.to_standardized_output(
-        model_path=model_file,
-        backend_name="corstone-320",
-        target_config={"mac": 1024, "target": "ethos-u85"},
-    )
-
-    result = output["results"][0]
-    breakdown = result["breakdowns"][0]
-    assert breakdown["entity_id"] == "source_operator/loc0"
-    assert result["entities"] == [
-        {
-            "id": "source_operator/loc0",
-            "kind": schema.ENTITY_KIND_SOURCE_OPERATOR,
-            "name": "Conv2DBias",
-            "placement": schema.PlacementType.NPU.value,
-        }
-    ]
-    metrics_by_name = {metric["name"]: metric for metric in breakdown["metrics"]}
-    assert {
-        name: metric.get("aggregation") for name, metric in metrics_by_name.items()
-    } == {
-        "staging_usage": "max",
-        "peak_staging": None,
-        "op_cycles": "sum",
-        "network_cycles": None,
-        "npu": "sum",
-        "sram_ac": "sum",
-        "dram_ac": "sum",
-        "onflash_ac": "sum",
-        "offflash_ac": "sum",
-        "mac_count": "sum",
-        "network_mac": None,
-        "util_mac": None,
-        "sram_usage": "max",
-        "peak": None,
-        "network": None,
-        "util": None,
-    }
-    assert {
-        name: {key: value for key, value in metric.items() if key != "aggregation"}
-        for name, metric in metrics_by_name.items()
-    } == {
-        "staging_usage": {"name": "staging_usage", "value": 150.0, "unit": "bytes"},
-        "peak_staging": {"name": "peak_staging", "value": 40.0, "unit": "%"},
-        "op_cycles": {"name": "op_cycles", "value": 300.0, "unit": "cycles"},
-        "network_cycles": {"name": "network_cycles", "value": 30.0, "unit": "%"},
-        "npu": {"name": "npu", "value": 300.0, "unit": "cycles"},
-        "sram_ac": {"name": "sram_ac", "value": 70.0, "unit": "accesses"},
-        "dram_ac": {"name": "dram_ac", "value": 20.0, "unit": "accesses"},
-        "onflash_ac": {"name": "onflash_ac", "value": 0.0, "unit": "accesses"},
-        "offflash_ac": {"name": "offflash_ac", "value": 0.0, "unit": "accesses"},
-        "mac_count": {"name": "mac_count", "value": 1500.0, "unit": "operations"},
-        "network_mac": {"name": "network_mac", "value": 18.0, "unit": "%"},
-        "util_mac": {"name": "util_mac", "value": 35.0, "unit": "%"},
-        "sram_usage": {"name": "sram_usage", "value": 160.0, "unit": "bytes"},
-        "peak": {"name": "peak", "value": 50.0, "unit": "%"},
-        "network": {"name": "network", "value": 32.0, "unit": "%"},
-        "util": {"name": "util", "value": 36.0, "unit": "%"},
-    }
-
-
 def test_performance_metrics_to_standardized_output_with_null_axi1_wr(
     tmp_path: Path,
 ) -> None:
@@ -1142,8 +829,7 @@ def test_performance_metrics_to_standardized_output_with_null_axi1_wr(
             npu_axi0_wr_data_beat_written=100,
             npu_axi1_rd_data_beat_received=150,
             npu_axi1_wr_data_beat_written=None,
-        ),
-        [],
+        )
     )
 
     # Create a model file for hash computation
@@ -1177,52 +863,6 @@ def test_performance_metrics_to_standardized_output_with_null_axi1_wr(
         assert metric["reason"]
 
 
-def test_performance_metrics_memory_uses_second_numeric_alias(
-    tmp_path: Path,
-) -> None:
-    """Corstone memory metrics should fall back to the next numeric alias."""
-    perf_metrics = CorstonePerformanceMetrics(
-        CorstoneModelPerformanceMetrics(
-            npu_active_cycles=1000,
-            npu_idle_cycles=500,
-            npu_total_cycles=1500,
-            npu_axi0_rd_data_beat_received=200,
-            npu_axi0_wr_data_beat_written=100,
-            npu_axi1_rd_data_beat_received=150,
-            npu_axi1_wr_data_beat_written=None,
-        ),
-        [
-            {
-                "NNG Operator": "op",
-                "Name": "op_name",
-                "Staging Usage": "",
-                "SRAM Usage": "256",
-                "Op Cycles": "100",
-            }
-        ],
-    )
-    model_file = tmp_path / "model.tflite"
-    model_file.write_bytes(b"test model content")
-
-    output = perf_metrics.to_standardized_output(
-        model_path=model_file,
-        backend_name="corstone-300",
-        target_config={"mac": 256, "target": "ethos-u55"},
-    )
-
-    metrics = {metric["name"]: metric for metric in output["results"][0]["metrics"]}
-    assert metrics[schema.METRIC_NAME_PEAK_ACTIVATION_MEMORY] == {
-        "name": schema.METRIC_NAME_PEAK_ACTIVATION_MEMORY,
-        "value": 256.0,
-        "unit": schema.UNIT_BYTES,
-    }
-    assert metrics[schema.METRIC_NAME_AVERAGE_MEMORY] == {
-        "name": schema.METRIC_NAME_AVERAGE_MEMORY,
-        "value": 256.0,
-        "unit": schema.UNIT_BYTES,
-    }
-
-
 def test_performance_metrics_to_standardized_output_validates(
     tmp_path: Path,
 ) -> None:
@@ -1236,16 +876,7 @@ def test_performance_metrics_to_standardized_output_validates(
             npu_axi0_wr_data_beat_written=100,
             npu_axi1_rd_data_beat_received=150,
             npu_axi1_wr_data_beat_written=75,
-        ),
-        [
-            {
-                "NNG Operator": "op",
-                "Name": "op_name",
-                "NPU": "1000",
-                "Staging Usage": "150",
-                "Op Cycles": "300",
-            }
-        ],
+        )
     )
     model_file = tmp_path / "model.tflite"
     model_file.write_bytes(b"test model content")
@@ -1272,8 +903,7 @@ def test_performance_metrics_to_standardized_output_reports_zero_utilization(
             npu_axi0_wr_data_beat_written=100,
             npu_axi1_rd_data_beat_received=150,
             npu_axi1_wr_data_beat_written=None,
-        ),
-        [],
+        )
     )
     model_file = tmp_path / "model.tflite"
     model_file.write_bytes(b"test model content")

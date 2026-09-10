@@ -5,13 +5,12 @@
 from __future__ import annotations
 
 import base64
-import csv
 import json
 import logging
 import os
 import re
 import subprocess
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any
 
@@ -25,21 +24,6 @@ from mlia.utils.filesystem import get_mlia_resource_dirs, get_mlia_resources, sh
 from mlia.utils.proc import Command, OutputLogger, process_command_output
 
 logger = logging.getLogger(__name__)
-
-
-def _split_locations(value: str) -> list[str]:
-    """Split semicolon-separated source-model locations."""
-    return [part for part in value.split(";") if part]
-
-
-def _source_operator_entity_id(source_reference: str) -> str:
-    """Return the canonical source-operator entity ID."""
-    return f"source_operator/{source_reference}"
-
-
-def _performance_group_entity_id(index: int) -> str:
-    """Return a result-local entity ID for one aggregate performance row."""
-    return f"performance_group/{index}"
 
 
 _FVP_VERSION_BY_BACKEND = {
@@ -62,183 +46,11 @@ _SUPPORTED_EXECUTORCH_APPLICATIONS = {
     ("corstone-320", "ethos-u85"),
 }
 
-# Supported Corstone per-layer CSV formats use different memory column names.
-# Treat them as aliases for the memory value used by standard memory metrics.
-_CORSTONE_STAGING_USAGE_COLUMN = "Staging Usage"
-_CORSTONE_SRAM_USAGE_COLUMN = "SRAM Usage"
-_CORSTONE_MEMORY_USAGE_COLUMNS = (
-    _CORSTONE_STAGING_USAGE_COLUMN,
-    _CORSTONE_SRAM_USAGE_COLUMN,
-)
-_CORSTONE_OP_CYCLES_COLUMN = "Op Cycles"
-
-_ADDITIVE_PER_LAYER_STATS = frozenset(
-    {
-        "Op Cycles",
-        "NPU",
-        "SRAM AC",
-        "DRAM AC",
-        "OnFlash AC",
-        "OffFlash AC",
-        "MAC Count",
-    }
-)
-_MAXIMUM_PER_LAYER_STATS = frozenset(_CORSTONE_MEMORY_USAGE_COLUMNS)
-
-# A superset of stats from all corstone versions
-_PER_LAYERS_STAT_UNITS = {
-    "Staging Usage": "bytes",
-    "Peak% (Staging)": "%",
-    "Op Cycles": "cycles",
-    "Network% (cycles)": "%",
-    "NPU": "cycles",
-    "SRAM AC": "accesses",
-    "DRAM AC": "accesses",
-    "OnFlash AC": "accesses",
-    "OffFlash AC": "accesses",
-    "MAC Count": "operations",
-    "Network% (MAC)": "%",
-    "Util% (MAC)": "%",
-    "SRAM Usage": "bytes",
-    "Peak%": "%",
-    "Network%": "%",
-    "Util%": "%",
-}
-
-
-def _sanitize_metric_name(name: str) -> str:
-    name = re.sub(r"[^\w\s]+", "", name).lower()  # Remove non-word-or-space characters
-    return name.replace(" ", "_")
-
-
-def _build_per_layer_metrics(stat: dict) -> list[schema.Metric]:
-    metrics = []
-    for name, value in stat.items():
-        unit = _PER_LAYERS_STAT_UNITS.get(name)
-        if unit is None or value in (None, ""):
-            continue
-        aggregation = (
-            schema.AggregationType.SUM
-            if name in _ADDITIVE_PER_LAYER_STATS
-            else schema.AggregationType.MAX
-            if name in _MAXIMUM_PER_LAYER_STATS
-            else None
-        )
-        metrics.append(
-            schema.Metric(
-                _sanitize_metric_name(name),
-                float(value),
-                unit,
-                aggregation=aggregation,
-            )
-        )
-    return metrics
-
-
-def _validate_numeric_per_layer_stat(
-    stat: dict,
-    column: str,
-) -> None:
-    """Validate one numeric Corstone per-layer CSV metric value."""
-    value = stat.get(column)
-    if value is None or value == "":
-        return
-
-    try:
-        float(value)
-    except (TypeError, ValueError) as err:
-        raise ValueError(
-            f"Per-layer CSV contains non-numeric metric in column {column!r} "
-            f"for layer {stat.get('Name', '<unknown>')!r}: {value!r}"
-        ) from err
-
-
-def _first_numeric_stat(stat: dict, *names: str) -> float | None:
-    """Return the first numeric stat value found for any of the names."""
-    for name in names:
-        value = stat.get(name)
-        if value is None or value == "":
-            continue
-        return float(value)
-    return None
-
-
-def _peak_activation_memory(per_layer_stats: list[dict]) -> float | None:
-    """Return the highest per-layer memory usage."""
-    memory_values = []
-    for stat in per_layer_stats:
-        memory = _first_numeric_stat(stat, *_CORSTONE_MEMORY_USAGE_COLUMNS)
-        if memory is not None:
-            memory_values.append(memory)
-
-    if not memory_values:
-        return None
-    return max(memory_values)
-
-
-def _average_memory(per_layer_stats: list[dict]) -> float | None:
-    """Return per-layer memory usage weighted by operation cycles."""
-    weighted_memory = 0.0
-    total_cycles = 0.0
-    for stat in per_layer_stats:
-        memory = _first_numeric_stat(stat, *_CORSTONE_MEMORY_USAGE_COLUMNS)
-        cycles = _first_numeric_stat(stat, _CORSTONE_OP_CYCLES_COLUMN)
-        if memory is None or cycles is None:
-            continue
-        weighted_memory += memory * cycles
-        total_cycles += cycles
-
-    if total_cycles == 0:
-        return None
-    return weighted_memory / total_cycles
-
 
 def _validate_non_negative_number(value: Any, description: str) -> None:
     """Validate a parsed numeric counter value."""
     if value is not None and value < 0:
         raise ValueError(f"Parsed metrics contain negative {description}: {value}")
-
-
-def _validate_non_negative_per_layer_stat(
-    stat: dict,
-    column: str,
-    description: str,
-) -> None:
-    """Validate one numeric Corstone per-layer CSV value when it is present."""
-    value = stat.get(column)
-    if value is None or value == "":
-        return
-
-    numeric_value = float(value)
-    if numeric_value < 0:
-        raise ValueError(
-            f"Per-layer CSV contains negative {description} in column "
-            f"{column!r} for layer {stat.get('Name', '<unknown>')!r}: {numeric_value}"
-        )
-
-
-def _validate_per_layer_stats(per_layer_stats: list[dict]) -> None:
-    """Validate parsed Corstone per-layer CSV metrics."""
-    for stat in per_layer_stats:
-        for column in _PER_LAYERS_STAT_UNITS:
-            _validate_numeric_per_layer_stat(stat, column)
-        for column in _CORSTONE_MEMORY_USAGE_COLUMNS:
-            _validate_non_negative_per_layer_stat(stat, column, "memory usage")
-        _validate_non_negative_per_layer_stat(
-            stat,
-            _CORSTONE_OP_CYCLES_COLUMN,
-            "operation cycles",
-        )
-
-
-def _parse_per_layer_csv(csv_file: Path) -> list[dict]:
-    layer_stats = []
-    with open(csv_file, encoding="UTF-8") as file:
-        reader = csv.DictReader(file)
-        for row in reader:
-            layer_stats.append(dict(row))
-
-    return layer_stats
 
 
 @dataclass
@@ -361,10 +173,9 @@ def _build_model_metrics(
 
 def _build_standard_corstone_metrics(
     model_stats: CorstoneModelPerformanceMetrics,
-    per_layer_stats: list[dict],
 ) -> list[schema.Metric]:
-    """Build Corstone-backed standard performance metrics."""
-    metrics = [
+    """Build standard metrics derived from Corstone model counters."""
+    return [
         schema.Metric(
             name=schema.METRIC_NAME_TARGET_UTILIZATION,
             value=_target_utilization(model_stats),
@@ -372,96 +183,21 @@ def _build_standard_corstone_metrics(
         )
     ]
 
-    peak_activation_memory = _peak_activation_memory(per_layer_stats)
-    if peak_activation_memory is not None:
-        metrics.append(
-            schema.Metric(
-                name=schema.METRIC_NAME_PEAK_ACTIVATION_MEMORY,
-                value=peak_activation_memory,
-                unit=schema.UNIT_BYTES,
-            )
-        )
-
-    average_memory = _average_memory(per_layer_stats)
-    if average_memory is not None:
-        metrics.append(
-            schema.Metric(
-                name=schema.METRIC_NAME_AVERAGE_MEMORY,
-                value=average_memory,
-                unit=schema.UNIT_BYTES,
-            )
-        )
-
-    return metrics
-
-
-def _build_per_layer_entities_and_breakdowns(
-    per_layer_stats: list[dict],
-) -> tuple[list[schema.Entity], list[schema.Breakdown]]:
-    """Build Corstone entities and per-layer breakdowns."""
-    entities_by_id: dict[str, schema.Entity] = {}
-    breakdowns = []
-    for idx, stat in enumerate(per_layer_stats):
-        source_locations = list(dict.fromkeys(_split_locations(stat["Name"])))
-        source_operator_ids = [
-            _source_operator_entity_id(location) for location in source_locations
-        ]
-        for source_operator_id, source_location in zip(
-            source_operator_ids, source_locations
-        ):
-            entities_by_id.setdefault(
-                source_operator_id,
-                schema.Entity(
-                    id=source_operator_id,
-                    kind=schema.ENTITY_KIND_SOURCE_OPERATOR,
-                    name=stat["NNG Operator"],
-                    placement=schema.PlacementType.NPU.value,
-                ),
-            )
-        if len(source_operator_ids) == 1:
-            entity_id = source_operator_ids[0]
-        else:
-            entity_id = _performance_group_entity_id(idx)
-            entities_by_id[entity_id] = schema.Entity(
-                id=entity_id,
-                kind="performance_group",
-                name=stat["NNG Operator"] or stat["Name"],
-                child_ids=source_operator_ids,
-                placement=schema.PlacementType.NPU.value,
-            )
-            for source_operator_id in source_operator_ids:
-                entities_by_id[source_operator_id].parent_ids.append(entity_id)
-        breakdowns.append(
-            schema.Breakdown(
-                entity_id=entity_id,
-                metrics=_build_per_layer_metrics(stat),
-            )
-        )
-    return list(entities_by_id.values()), breakdowns
-
 
 @dataclass
 class CorstonePerformanceMetrics:
-    """Performance metrics parsed from generic inference output."""
+    """Model-wide performance metrics parsed from Corstone FVP output."""
 
     npu_model_stats: CorstoneModelPerformanceMetrics
-    npu_per_layer_stats: list = field(default_factory=list)
 
     @classmethod
     def from_fvp_out(
-        cls, target: str, metrics: dict[str, Any], per_layer_file: Path | None = None
+        cls, target: str, metrics: dict[str, Any]
     ) -> CorstonePerformanceMetrics:
-        """Create CorstoneModelPerformanceMetrics from FVP output."""
+        """Create model-wide performance metrics from FVP output."""
         model_stats = CorstoneModelPerformanceMetrics.from_fvp_metrics(target, metrics)
         _validate_non_negative_model_stats(model_stats)
-
-        per_layer_stats = _parse_per_layer_csv(per_layer_file) if per_layer_file else []
-        _validate_per_layer_stats(per_layer_stats)
-
-        return cls(
-            model_stats,
-            per_layer_stats,
-        )
+        return cls(model_stats)
 
     def to_standardized_output(
         self,
@@ -570,18 +306,11 @@ class CorstonePerformanceMetrics:
         )
 
         metrics = _build_model_metrics(self.npu_model_stats)
-        metrics.extend(
-            _build_standard_corstone_metrics(
-                self.npu_model_stats,
-                self.npu_per_layer_stats,
-            )
-        )
+        metrics.extend(_build_standard_corstone_metrics(self.npu_model_stats))
         metrics = schema.ensure_standard_performance_metrics(metrics)
-        entities, breakdowns = _build_per_layer_entities_and_breakdowns(
-            self.npu_per_layer_stats
-        )
 
-        # Create result
+        # Corstone owns FVP model-wide measurements. Per-layer estimates belong
+        # to the Vela result and are intentionally not included here.
         result = schema.Result(
             kind=schema.ResultKind.PERFORMANCE,
             status=schema.ResultStatus.OK,
@@ -590,13 +319,6 @@ class CorstonePerformanceMetrics:
             errors=[],
             metrics=metrics,
             mode=schema.ModeType.SIMULATED,  # Corstone is simulation
-            breakdowns=breakdowns,
-            entities=entities,
-            entity_kinds=[
-                schema.EntityKind(
-                    id="performance_group", child_kinds=["source_operator"]
-                )
-            ],
         )
 
         return schema.StandardizedOutput(
@@ -628,17 +350,11 @@ class GenericInferenceOutputParser:
             self.base64_data.append(res_b64.group(1))
 
     def get_metrics(
-        self, output_dir: Path, target: str = "default"
+        self, _output_dir: Path, target: str = "default"
     ) -> CorstonePerformanceMetrics:
-        """Parse the collected data and return perf metrics."""
+        """Parse model-wide FVP metrics from the collected output."""
         try:
-            parsed_metrics = self._parse_data()
-            per_layer_file = next(output_dir.glob("*_per-layer.csv"), None)
-            return CorstonePerformanceMetrics.from_fvp_out(
-                target,
-                parsed_metrics,
-                per_layer_file,
-            )
+            return CorstonePerformanceMetrics.from_fvp_out(target, self._parse_data())
         except Exception as err:
             raise ValueError(f"Unable to parse output and get metrics: {err}") from err
 

@@ -471,9 +471,7 @@ def test_saved_model_performance_uses_converted_artifact_and_original_metadata(
     vela_serializer = MagicMock(wraps=vela_metrics.to_standardized_output)
     setattr(vela_metrics, "to_standardized_output", vela_serializer)
 
-    corstone_metrics = CorstonePerf(
-        CorstoneModelPerformanceMetrics(1, 2, 3, 4, 5, 6), []
-    )
+    corstone_metrics = CorstonePerf(CorstoneModelPerformanceMetrics(1, 2, 3, 4, 5, 6))
     corstone_serializer = MagicMock(wraps=corstone_metrics.to_standardized_output)
     setattr(corstone_metrics, "to_standardized_output", corstone_serializer)
     performance.corstone_metrics = corstone_metrics
@@ -1158,7 +1156,7 @@ def test_performance_collector_pytorch_with_corstone_backend(
         LayerwisePerfInfo(layerwise_info=[]),
     )
     metrics.corstone_metrics = CorstonePerf(
-        CorstoneModelPerformanceMetrics(1, 2, 3, 4, 5, 6), []
+        CorstoneModelPerformanceMetrics(1, 2, 3, 4, 5, 6)
     )
     captured_backends: list[str] | None = None
 
