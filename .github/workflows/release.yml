@@ -82,7 +82,7 @@ jobs:
           path: dist/*
 
   test_e2e:
-    name: End-to-End Tests (Shard ${{ matrix.display_index }}/${{ matrix.total }})
+    name: End-to-End Tests (${{ matrix.suite }}, Shard ${{ matrix.display_index }}/${{ matrix.total }})
     if: ${{ github.repository_owner != 'arm' }}
     runs-on: ["${{ vars.UBUNTU_RUNNER }}", "X64"]
     needs:
@@ -91,10 +91,51 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {index: 0, display_index: 1, total: 4}
-          - {index: 1, display_index: 2, total: 4}
-          - {index: 2, display_index: 3, total: 4}
-          - {index: 3, display_index: 4, total: 4}
+          - suite: tflite
+            index: 0
+            display_index: 1
+            total: 4
+            artifacts: ${{ vars.MLIA_E2E_ARTIFACTS }}
+            backends: ${{ vars.MLIA_E2E_BACKENDS }}
+            executions: ${{ vars.MLIA_E2E_EXECUTIONS }}
+            converter_package: ""
+            run_api_e2e: true
+          - suite: tflite
+            index: 1
+            display_index: 2
+            total: 4
+            artifacts: ${{ vars.MLIA_E2E_ARTIFACTS }}
+            backends: ${{ vars.MLIA_E2E_BACKENDS }}
+            executions: ${{ vars.MLIA_E2E_EXECUTIONS }}
+            converter_package: ""
+            run_api_e2e: false
+          - suite: tflite
+            index: 2
+            display_index: 3
+            total: 4
+            artifacts: ${{ vars.MLIA_E2E_ARTIFACTS }}
+            backends: ${{ vars.MLIA_E2E_BACKENDS }}
+            executions: ${{ vars.MLIA_E2E_EXECUTIONS }}
+            converter_package: ""
+            run_api_e2e: false
+          - suite: tflite
+            index: 3
+            display_index: 4
+            total: 4
+            artifacts: ${{ vars.MLIA_E2E_ARTIFACTS }}
+            backends: ${{ vars.MLIA_E2E_BACKENDS }}
+            executions: ${{ vars.MLIA_E2E_EXECUTIONS }}
+            converter_package: ""
+            run_api_e2e: false
+          - suite: pytorch
+            index: 0
+            display_index: 1
+            total: 1
+            artifacts: ${{ vars.MLIA_E2E_PYTORCH_ARTIFACTS }}
+            backends: ${{ vars.MLIA_E2E_PYTORCH_BACKENDS }}
+            executions: ${{ vars.MLIA_E2E_PYTORCH_EXECUTIONS }}
+            converter_package: "mlia-converters-pytorch>=0.1.1.dev8,<0.2"
+            run_api_e2e: false
     steps:
       - name: Import secrets from Vault
         if: >-
@@ -118,32 +159,55 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+      - name: Validate e2e configuration
+        env:
+          E2E_ARTIFACTS_CONFIG: ${{ matrix.artifacts }}
+          E2E_BACKENDS_CONFIG: ${{ matrix.backends }}
+          E2E_EXECUTIONS_CONFIG: ${{ matrix.executions }}
+        run: |
+          if [[ -z "$E2E_ARTIFACTS_CONFIG" ]]; then
+            echo "E2E artifact configuration is empty for the ${{ matrix.suite }} suite."
+            exit 1
+          fi
+          if [[ -z "$E2E_BACKENDS_CONFIG" ]]; then
+            echo "E2E backend configuration is empty for the ${{ matrix.suite }} suite."
+            exit 1
+          fi
+          if [[ -z "$E2E_EXECUTIONS_CONFIG" ]]; then
+            echo "E2E execution configuration is empty for the ${{ matrix.suite }} suite."
+            exit 1
+          fi
       - name: Prepare artifacts
-        if: ${{ vars.MLIA_E2E_ARTIFACTS != '' }}
         uses: Arm-Debug/github-workflow-wizardry/.github/actions/prepare-artifacts@main
         env:
           ARTIFACT_HTTP_SOURCE_HOST: ${{ vars.ARTIFACT_HTTP_SOURCE_HOST }}
           ARTIFACT_HTTP_SOURCE_AUTH: ${{ vars.ARTIFACT_HTTP_SOURCE_AUTH }}
         with:
-          artifacts: ${{ vars.MLIA_E2E_ARTIFACTS }}
+          artifacts: ${{ matrix.artifacts }}
           destination: ${{ env.ARTIFACTS_PATH }}
       - run: uv sync --no-sources --no-install-project --only-group test
       # Ensure pip is available because mlia-backend install shells out to python -m pip for backend dependencies.
       - run: ${{ env.UV_PROJECT_ENVIRONMENT }}/bin/python -m ensurepip --upgrade
       - name: Run e2e pytest
         env:
+          CONVERTER_PACKAGE: ${{ matrix.converter_package }}
           MLIA_E2E_ARTIFACTS: ${{ env.ARTIFACTS_PATH }}
-          MLIA_E2E_BACKENDS: ${{ vars.MLIA_E2E_BACKENDS }}
-          MLIA_E2E_EXECUTIONS: ${{ vars.MLIA_E2E_EXECUTIONS }}
+          MLIA_E2E_BACKENDS: ${{ matrix.backends }}
+          MLIA_E2E_EXECUTIONS: ${{ matrix.executions }}
           MLIA_E2E_SHARD_INDEX: ${{ matrix.index }}
           MLIA_E2E_SHARD_COUNT: ${{ matrix.total }}
         run: |
           mkdir -p report
-          rm -f "report/report-${{ matrix.index }}.xml"
-          rm -rf "report/pdf-${{ matrix.index }}"
+          rm -f "report/report-${{ matrix.suite }}-${{ matrix.index }}.xml"
+          rm -rf "report/pdf-${{ matrix.suite }}-${{ matrix.index }}"
+          converter_args=()
+          if [[ -n "$CONVERTER_PACKAGE" ]]; then
+            converter_args=(--with "$CONVERTER_PACKAGE")
+          fi
           set -o pipefail
           uv run --no-sync \
             --with dist/*.whl \
+            "${converter_args[@]}" \
             -- pytest -v tests/test_e2e.py \
               -x \
               -s \
@@ -151,12 +215,12 @@ jobs:
               -o junit_logging=out-err \
               -o junit_log_passing_tests=true \
               --no-cov \
-              --junitxml="report/report-${{ matrix.index }}.xml"
+              --junitxml="report/report-${{ matrix.suite }}-${{ matrix.index }}.xml"
       - name: Run API e2e pytest
-        if: ${{ matrix.index == 0 }}
+        if: ${{ matrix.run_api_e2e }}
         env:
           MLIA_E2E_ARTIFACTS: ${{ env.ARTIFACTS_PATH }}
-          MLIA_E2E_BACKENDS: ${{ vars.MLIA_E2E_BACKENDS }}
+          MLIA_E2E_BACKENDS: ${{ matrix.backends }}
         run: |
           set -o pipefail
           uv run --no-sync \
@@ -168,19 +232,19 @@ jobs:
               -o junit_logging=out-err \
               -o junit_log_passing_tests=true \
               --no-cov \
-              --junitxml="report/api-report-${{ matrix.index }}.xml"
+              --junitxml="report/api-report-${{ matrix.suite }}-${{ matrix.index }}.xml"
       - name: Upload e2e junit
         if: >-
           ${{
             always() &&
             (
-              hashFiles(format('report/report-{0}.xml', matrix.index)) != '' ||
-              hashFiles(format('report/api-report-{0}.xml', matrix.index)) != ''
+              hashFiles(format('report/report-{0}-{1}.xml', matrix.suite, matrix.index)) != '' ||
+              hashFiles(format('report/api-report-{0}-{1}.xml', matrix.suite, matrix.index)) != ''
             )
           }}
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-junit-shard-${{ matrix.index }}
+          name: e2e-junit-shard-${{ matrix.suite }}-${{ matrix.index }}
           path: report/*.xml
 
   combine_e2e_pdf:

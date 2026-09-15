@@ -33,6 +33,17 @@ def expects_vela_layer_wise_metrics(case: mlia_e2e.E2ECase) -> bool:
     return "--backend" not in case.args or "vela" in case.args
 
 
+def requested_corstone_backends(case: mlia_e2e.E2ECase) -> tuple[str, ...]:
+    """Return explicitly requested Corstone backends from an e2e case."""
+    return tuple(
+        value
+        for index, value in enumerate(case.args)
+        if index > 0
+        and case.args[index - 1] == "--backend"
+        and value.startswith("corstone-")
+    )
+
+
 @mlia_e2e.parametrize(mlia_e2e.E2E_COMPATIBILITY)
 def test_e2e_compatibility(
     case: mlia_e2e.E2ECase,
@@ -67,4 +78,6 @@ def test_e2e_performance(
     if expects_vela_layer_wise_metrics(case):
         for pattern in ETHOS_U_VELA_PERFORMANCE_PATTERNS:
             assert_matches(pattern, output)
+    for backend in requested_corstone_backends(case):
+        assert_matches(rf".*Producer.*{re.escape(backend)}.*", output)
     mlia_e2e.emit_e2e_results(result)
