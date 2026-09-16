@@ -7,7 +7,7 @@ dynamic = ["version", "readme"]
 description = "ML Inference Advisor Ethos Plugin"
 requires-python = ">=3.10"
 dependencies = [
-    "mlia==0.12.2.dev25+af0dc45"
+    "mlia==0.12.2"
 ]
 keywords = ["ml", "arm", "ethos", "tflite"]
 authors = [{name = "Arm Ltd", email = "mlia@arm.com"}]
@@ -34,8 +34,8 @@ vela = "mlia.backend.vela.plugin:VelaBackendPlugin"
 
 [build-system]
 requires = [
-    "hatchling>=1.27.0",
-    "uv-dynamic-versioning>=0.8.2,<0.9.0"
+    "hatchling==1.32.0",
+    "uv-dynamic-versioning==0.14.1"
 ]
 build-backend = "hatchling.build"
 
@@ -97,24 +97,24 @@ markers = [
 
 [dependency-groups]
 test = [
-    "hatchling>=1.27.0",
-    "pytest~=9.0",
-    "pytest-cov~=7.0",
-    "ethos-u-vela==5.1.0",
-    "flaky~=3.8.1",
-    "jsonschema~=4.26",
+    "hatchling==1.32.0",
+    "pytest==9.1.1",
+    "pytest-cov==7.1.0",
+    "ethos-u-vela==5.2.0",
+    "flaky==3.8.1",
+    "jsonschema==4.26.0",
     "numpy==2.2.6",
-    "tensorflow",
-    "tf-keras"
+    "tensorflow==2.21.0",
+    "tf-keras==2.21.0"
 ]
 dev = [
     {include-group = "test"},
-    "mypy==1.5.1",
-    "pip>=26.1",
-    "pre-commit==4.5.1"
+    "mypy==2.3.1",
+    "pip==26.2.1",
+    "pre-commit==4.6.2"
 ]
 docs = [
-    "mkdocs>=1.6,<2.0",
-    "mkdocs-material>=9.5,<10.0",
-    "pymdown-extensions>=10.0,<11.0"
+    "mkdocs==1.6.1",
+    "mkdocs-material==9.7.7",
+    "pymdown-extensions==11.0.2"
 ]

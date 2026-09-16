@@ -59,7 +59,7 @@ from mlia.target.ethos_u.performance import (
 
 
 def _fact_payload(fact: Fact) -> object:
-    if is_dataclass(fact):
+    if is_dataclass(fact) and not isinstance(fact, type):
         return asdict(fact)
     return fact
 

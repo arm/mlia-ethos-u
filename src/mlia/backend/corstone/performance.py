@@ -10,6 +10,7 @@ import logging
 import os
 import re
 import subprocess
+from collections import deque
 from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any
@@ -339,15 +340,30 @@ class GenericInferenceOutputParser:
     """Generic inference runner output parser."""
 
     pattern = re.compile(r"<metrics>(.*)</metrics>")
+    # Match runner error records, not warnings or incidental mentions of errors.
+    error_pattern = re.compile(
+        r"^(?:ERROR - |E \[ExecuTorch:|"
+        r"TFLM - (?:Failed to |Didn't find op for ))"
+    )
 
     def __init__(self) -> None:
         """Init parser."""
         self.base64_data: list[str] = []
+        self.errors: list[str] = []
+        self.output_tail: deque[str] = deque(maxlen=8)
 
     def __call__(self, line: str) -> None:
-        """Extract base64 strings from the app output."""
+        """Collect metrics and bounded diagnostics from the app output."""
         if res_b64 := self.pattern.search(line):
             self.base64_data.append(res_b64.group(1))
+            return
+        diagnostic = line.strip()[:1024]
+        if diagnostic:
+            self.output_tail.append(diagnostic)
+        if self.error_pattern.match(diagnostic):
+            # Retain the first causes while bounding the user-facing diagnostic.
+            if len(self.errors) < 8 and diagnostic not in self.errors:
+                self.errors.append(diagnostic)
 
     def get_metrics(
         self, _output_dir: Path, target: str = "default"
@@ -543,6 +559,7 @@ def get_metrics(cfg: CorstoneRunConfig) -> CorstonePerformanceMetrics:
 
     output_parser = GenericInferenceOutputParser()
     output_logger = OutputLogger(logger)
+    failure_context = f"Backend execution failed. {cfg.fvp}, model '{cfg.model}': "
 
     try:
         process_command_output(
@@ -550,17 +567,16 @@ def get_metrics(cfg: CorstoneRunConfig) -> CorstonePerformanceMetrics:
             [output_parser, output_logger],
         )
     except subprocess.CalledProcessError as err:
-        raise BackendExecutionFailed("Backend execution failed.") from err
+        details = "; ".join(output_parser.errors or output_parser.output_tail)
+        raise BackendExecutionFailed(
+            f"{failure_context}exit code {err.returncode}. {details}".rstrip()
+        ) from err
 
-    try:
-        return output_parser.get_metrics(cfg.output_dir, cfg.fvp)
-    except ValueError as err:
-        if cfg.is_pte:
-            raise BackendExecutionFailed(
-                "Backend execution failed. Ensure .pte file is compatible "
-                "with ExecuTorch Corstone FVP."
-            ) from err
-        raise
+    # The simulator can exit successfully even when the inference runner fails.
+    if output_parser.errors:
+        raise BackendExecutionFailed(failure_context + "; ".join(output_parser.errors))
+
+    return output_parser.get_metrics(cfg.output_dir, cfg.fvp)
 
 
 def estimate_performance(

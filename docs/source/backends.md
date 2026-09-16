@@ -80,6 +80,33 @@ answer to questions like:
 - Do I need to run the supported ExecuTorch AOT path instead of the standard
   `.tflite` flow?
 
+### ExecuTorch performance support
+
+For `--performance`, the bundled ExecuTorch inference runners support the
+following target and backend combinations. This applies both to direct `.pte`
+inputs and to `.pt2` inputs converted to `.pte` by `mlia-converters-pytorch`.
+
+| Target | ExecuTorch performance backend |
+| --- | --- |
+| Ethos-U55 | `corstone-300` |
+| Ethos-U85 | `corstone-320` |
+| Ethos-U65 | Unsupported |
+
+For Ethos-U65, performance estimation from a PyTorch `.pt2` input is supported
+only through Vela, with
+[mlia-converters-pytorch](https://github.com/arm/mlia-converters-pytorch) installed:
+
+```bash
+mlia check my_model.pt2 --target-profile ethos-u65-256 --performance --backend vela
+```
+
+This produces compiler-based estimates. Vela does not accept `.pte` inputs;
+use the original `.pt2` model. There is currently no supported performance
+backend for Ethos-U65 `.pte` models.
+
+Corstone support for TFLite models is separate: for example, Ethos-U65
+`.tflite` performance remains supported on `corstone-310`.
+
 ### Corstone backend: good first commands
 
 Run Corstone directly when you already know you want the deeper path:

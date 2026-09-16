@@ -1113,7 +1113,7 @@ def test_performance_collector_pytorch_model(
 
 
 def test_performance_collector_pte_rejects_unsupported_default_target(
-    sample_context: Context, tmp_path: Path
+    sample_context: Context, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Test ExecuTorch performance rejects targets without a default runner."""
     target = EthosUConfiguration.load_profile("ethos-u65-256")
@@ -1125,6 +1125,17 @@ def test_performance_collector_pte_rejects_unsupported_default_target(
 
     with pytest.raises(ConfigurationError, match="not supported for target"):
         collector.collect_data()
+
+    transform = MagicMock(side_effect=AssertionError("Conversion must not start"))
+    monkeypatch.setattr("mlia.target.ethos_u.performance.transform_model", transform)
+    for suffix in (".pte", ".pt2"):
+        model = pte_model.with_suffix(suffix)
+        model.touch()
+        collector = EthosUPerformance(model, target, backends=["corstone-310"])
+        collector.set_context(sample_context)
+        with pytest.raises(ConfigurationError, match="not supported for target"):
+            collector.collect_data()
+    transform.assert_not_called()
 
 
 def test_performance_collector_pytorch_with_corstone_backend(

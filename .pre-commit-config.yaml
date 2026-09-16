@@ -41,7 +41,7 @@ repos:
   rev: 6.3.0
   hooks:
     - id: pydocstyle
-      additional_dependencies: ["tomli==2.0.1"]
+      additional_dependencies: ["tomli==2.4.1"]
 
 - repo: https://github.com/jackdewinter/pymarkdown
   rev: v0.9.35

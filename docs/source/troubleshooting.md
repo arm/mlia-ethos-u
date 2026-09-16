@@ -62,9 +62,14 @@ the input itself first.
 For the Corstone ExecuTorch path:
 
 - Use `.pt2` only when `mlia-converters-pytorch` is installed.
-- Use `.pte` only with supported Corstone target and backend combinations.
+- Use `.pte` only with Ethos-U55 / `corstone-300` or Ethos-U85 / `corstone-320`.
 - Do not expect `.pte` files to participate in the normal Vela compatibility
   flow.
+
+For Ethos-U65, use the original `.pt2` model with `--performance --backend vela`.
+The U65 Corstone runners support TFLite, but not ExecuTorch `.pte` models.
+Ethos-U65 `.pte` performance is currently unsupported. See the
+[support matrix](backends.md#executorch-performance-support).
 
 ## The run succeeds, but the numbers are not helpful yet
 

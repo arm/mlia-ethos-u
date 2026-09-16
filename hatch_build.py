@@ -21,7 +21,8 @@ def _replace_markdown_relative_paths(path: Path, file_name: str, revision: str) 
 
     content = path.joinpath(file_name).read_text(encoding="utf-8")
     for match, link in re.findall(md_link_pattern, content):
-        if link.startswith("#") or path.joinpath(link).exists():
+        link_path = link.split("#", 1)[0]
+        if link.startswith("#") or path.joinpath(link_path).exists():
             if link.startswith("#"):
                 new_url = md_url.substitute(rev=revision, link=file_name + link)
             else:

@@ -52,8 +52,11 @@ Additional formats can also participate in Ethos-U workflows:
   installed.
 
 Quantized LiteRT / TensorFlow Lite `.tflite` models are the standard input for
-Vela and most Ethos-U analysis. The `.pt2` and `.pte` paths apply to supported
-Corstone ExecuTorch AOT flows.
+Vela and most Ethos-U analysis. PyTorch `.pt2` inputs also support Vela
+performance estimation, which is the only performance route for `.pt2` on
+Ethos-U65. ExecuTorch `.pte` performance is supported only on Ethos-U55 with
+`corstone-300` and Ethos-U85 with `corstone-320`; it is unsupported on Ethos-U65.
+See the [support matrix](backends.md#executorch-performance-support).
 
 ## Typical usage
 

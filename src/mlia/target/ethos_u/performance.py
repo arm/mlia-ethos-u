@@ -16,6 +16,7 @@ from mlia.backend.corstone import is_corstone_backend
 from mlia.backend.corstone.performance import (
     CorstonePerformanceMetrics,
     estimate_performance,
+    get_generic_inference_app_path,
 )
 from mlia.backend.errors import BackendUnavailableError
 from mlia.backend.vela.performance import LayerwisePerfInfo
@@ -322,6 +323,18 @@ class CorstonePerformanceEstimator(
 
     def _prepare_executorch_model(self, model_path: Path) -> Path:
         """Prepare an ExecuTorch-compatible model artifact."""
+        try:
+            get_generic_inference_app_path(
+                self.backend, self.target_config.target, True
+            )
+        except ValueError as err:
+            message = (
+                "ExecuTorch performance is not supported for target "
+                f"'{self.target_config.target}' with backend '{self.backend}'."
+            )
+            if is_pytorch_file(model_path):
+                message += " Use '-b vela' for compiler-based performance estimates."
+            raise ConfigurationError(message) from err
         if is_pte_file(model_path):
             return model_path
         if not is_pytorch_file(model_path):

@@ -16,7 +16,8 @@ def test_metadata_hook_update_uses_commit_hash(
 ) -> None:
     """README metadata links should target the current commit."""
     (tmp_path / "README.md").write_text(
-        "[Docs](docs.md)\n![Image](image.png)\n[Section](#section)",
+        "[Docs](docs.md)\n![Image](image.png)\n[Section](#section)\n"
+        "[Details](docs.md#details)",
         encoding="utf-8",
     )
     (tmp_path / "docs.md").touch()
@@ -42,7 +43,9 @@ def test_metadata_hook_update_uses_commit_hash(
         "![Image](https://raw.githubusercontent.com/arm/mlia-ethos-u/"
         "0123456789abcdef/image.png)\n"
         "[Section](https://github.com/arm/mlia-ethos-u/blob/"
-        "0123456789abcdef/README.md#section)",
+        "0123456789abcdef/README.md#section)\n"
+        "[Details](https://github.com/arm/mlia-ethos-u/blob/"
+        "0123456789abcdef/docs.md#details)",
     }
 
 

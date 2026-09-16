@@ -1075,10 +1075,10 @@ def test_performance_metrics_preserves_vela_summary_statistics(
         cycles_on_chip_flash_access=0.0,
         cycles_off_chip_flash_access=0.0,
         core_clock=10_000.0,
-        dram_memory_used=512.0,
-        sram_memory_used=1024.0,
-        on_chip_flash_memory_used=0.0,
-        off_chip_flash_memory_used=0.0,
+        dram_memory_used=287.875,
+        sram_memory_used=267.65625,
+        on_chip_flash_memory_used=0.25,
+        off_chip_flash_memory_used=1.5,
         batch_size=1,
         memory_mode="Shared_Sram",
         system_config="Ethos_U55_High_End_Embedded",
@@ -1131,6 +1131,19 @@ def test_performance_metrics_preserves_vela_summary_statistics(
         debug_db_path=tmp_path / f"{test_tflite_model.stem}_debug.xml",
     )
     metrics = {metric["name"]: metric for metric in output["results"][0]["metrics"]}
+    for area, expected_bytes in (
+        ("sram", 274080),
+        ("dram", 294784),
+        ("on_chip_flash", 256),
+        ("off_chip_flash", 1536),
+    ):
+        for suffix in ("memory_area_size", "memory_used"):
+            name = f"{area}_{suffix}"
+            assert metrics[name] == {
+                "name": name,
+                "value": expected_bytes,
+                "unit": schema.UNIT_BYTES,
+            }
     assert metrics["total_original_weights"] == {
         "name": "total_original_weights",
         "value": 64.0,

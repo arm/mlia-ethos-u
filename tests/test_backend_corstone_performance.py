@@ -158,6 +158,22 @@ def test_generic_inference_output_parser_rejects_negative_model_counter(
         output_parser.get_metrics(tmp_path)
 
 
+def test_generic_inference_output_parser_bounds_diagnostics() -> None:
+    """Keep the original cause without repeating or accumulating unbounded output."""
+    parser = GenericInferenceOutputParser()
+    first_error = "ERROR - Failed to initialise model"
+    for _ in range(100):
+        parser(first_error)
+    assert parser.errors == [first_error]
+    for index in range(100):
+        parser(f"ERROR - failure {index}: " + "x" * 2000)
+    assert parser.errors[0] == first_error
+    assert len(parser.errors) == 8
+    assert all(len(error) <= 1024 for error in parser.errors)
+    assert len(parser.output_tail) == 8
+    assert all(len(line) <= 1024 for line in parser.output_tail)
+
+
 @dataclass(frozen=True)
 class BuildCmdCase:
     """Build Command Case function."""
@@ -435,11 +451,13 @@ def test_get_metrics_wrong_fvp(tmp_path: Path) -> None:
         )
 
 
-def test_get_metrics_pte_parse_failure_is_wrapped(
+@pytest.mark.parametrize("is_pte", [False, True])
+def test_get_metrics_parse_failure_preserves_missing_metric(
+    is_pte: bool,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Test .pte parser failures include ExecuTorch compatibility guidance."""
+    """Missing metrics without runner errors remain a report parsing failure."""
     monkeypatch.setattr(
         "mlia.backend.corstone.performance.build_corstone_command",
         MagicMock(return_value=Command(["fvp"])),
@@ -450,8 +468,8 @@ def test_get_metrics_pte_parse_failure_is_wrapped(
     )
 
     with pytest.raises(
-        BackendExecutionFailed,
-        match="Ensure .pte file is compatible with ExecuTorch Corstone FVP",
+        ValueError,
+        match="Unable to parse output and get metrics: .*NPU ACTIVE",
     ):
         get_metrics(
             CorstoneRunConfig(
@@ -460,8 +478,8 @@ def test_get_metrics_pte_parse_failure_is_wrapped(
                 "corstone-300",
                 "ethos-u55",
                 256,
-                Path("model.pte"),
-                True,
+                Path("model.pte" if is_pte else "model.tflite"),
+                is_pte,
                 "default",
             )
         )
@@ -561,13 +579,16 @@ def test_estimate_performance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     mock_repository.get_backend_settings.assert_called_once()
 
     # Check if BackendExecutionFailed is raised if the corstone command fails
-    mock_check_call = MagicMock(
-        side_effect=subprocess.CalledProcessError(returncode=1, cmd="fvp")
-    )
+    def failed_command_output(_command: Command) -> Generator[str, None, None]:
+        yield "FVP: Unable to open model file"
+        raise subprocess.CalledProcessError(returncode=1, cmd="fvp")
 
-    monkeypatch.setattr("mlia.utils.proc.command_output", mock_check_call)
+    monkeypatch.setattr("mlia.utils.proc.command_output", failed_command_output)
 
-    with pytest.raises(BackendExecutionFailed, match="Backend execution failed."):
+    with pytest.raises(
+        BackendExecutionFailed,
+        match="exit code 1.*FVP: Unable to open model file",
+    ):
         _ = estimate_performance(
             "ethos-u55", 256, Path("model.tflite"), "corstone-300", tmp_path
         )
@@ -920,3 +941,124 @@ def test_performance_metrics_to_standardized_output_reports_zero_utilization(
         "value": 0.0,
         "unit": schema.UNIT_PERCENT,
     }
+
+
+@pytest.mark.parametrize("returncode", [0, 1])
+@pytest.mark.parametrize("with_metrics", [False, True])
+@pytest.mark.parametrize(
+    ("is_pte", "diagnostics"),
+    [
+        (
+            False,
+            [
+                "TFLM - Failed to resize buffer. Requested: 6454784, available 2096904, missing: 4357880",
+                "ERROR - tensor allocation failed!",
+                "ERROR - Failed to initialise model",
+            ],
+        ),
+        (
+            False,
+            [
+                "TFLM - Didn't find op for builtin opcode 'SELECT'",
+                "TFLM - Failed to get registration from op code SELECT",
+                "ERROR - tensor allocation failed!",
+            ],
+        ),
+        (
+            True,
+            [
+                "E [ExecuTorch: program.cpp:97 load()] File size is too small. Expected file size from extended header is 54372208, actual file size from data loader is 33554432",
+                "ERROR - Program loading failed @ 0x0x90000000: 0x23",
+                "ERROR - Failed to initialise model",
+            ],
+        ),
+        (
+            True,
+            [
+                "ERROR - Failed to allocate 2229504 bytes. Allocator has 2097152 bytes left",
+                "ERROR - Failed to initialise model",
+            ],
+        ),
+    ],
+)
+def test_get_metrics_preserves_runner_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    is_pte: bool,
+    diagnostics: list[str],
+    returncode: int,
+    with_metrics: bool,
+) -> None:
+    """Release-smoke runner failures take precedence over absent or partial metrics."""
+    monkeypatch.setattr(
+        "mlia.backend.corstone.performance.build_corstone_command",
+        lambda _cfg: Command(["fvp"]),
+    )
+
+    def command_output(_command: Command) -> Generator[str, None, None]:
+        yield "INFO - Creating allocator using tensor arena"
+        yield from diagnostics
+        if with_metrics:
+            yield from valid_fvp_output()
+        if returncode:
+            raise subprocess.CalledProcessError(returncode, ["fvp"])
+
+    monkeypatch.setattr("mlia.utils.proc.command_output", command_output)
+    model = Path("model.pte" if is_pte else "model.tflite")
+    cfg = CorstoneRunConfig(
+        tmp_path,
+        Path("backend_path"),
+        "corstone-300",
+        "ethos-u55",
+        256,
+        model,
+        is_pte,
+        "default",
+    )
+    with pytest.raises(BackendExecutionFailed) as exc:
+        get_metrics(cfg)
+    message = str(exc.value)
+    assert "corstone-300" in message
+    assert str(model) in message
+    for diagnostic in diagnostics:
+        assert diagnostic in message
+    assert "NPU ACTIVE" not in message
+    assert "Ensure .pte file is compatible" not in message
+    if returncode:
+        assert "exit code 1" in message
+        assert isinstance(exc.value.__cause__, subprocess.CalledProcessError)
+
+
+@pytest.mark.parametrize("is_pte", [False, True])
+def test_get_metrics_ignores_warnings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    is_pte: bool,
+) -> None:
+    """Warnings and incidental mentions of errors do not invalidate metrics."""
+    monkeypatch.setattr(
+        "mlia.backend.corstone.performance.build_corstone_command",
+        lambda _cfg: Command(["fvp"]),
+    )
+
+    def command_output(_command: Command) -> Generator[str, None, None]:
+        yield "WARNING - Failed to enable optional tracing"
+        yield "INFO - Error count: 0"
+        yield "TFLM - Warning: optional diagnostic unavailable"
+        yield "W [ExecuTorch: runner.cpp:1 run()] optional tracing failed"
+        yield from valid_fvp_output()
+
+    monkeypatch.setattr("mlia.utils.proc.command_output", command_output)
+    cfg = CorstoneRunConfig(
+        tmp_path,
+        Path("backend_path"),
+        "corstone-300",
+        "ethos-u55",
+        256,
+        Path("model.pte" if is_pte else "model.tflite"),
+        is_pte,
+        "default",
+    )
+    assert get_metrics(cfg) == CorstonePerformanceMetrics(
+        CorstoneModelPerformanceMetrics(1, 2, 3, 4, 5, 6)
+    )

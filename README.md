@@ -80,7 +80,8 @@ pip install mlia-ethos-u
 ```
 
 If you want MLIA to accept PyTorch `.pt2` inputs directly for the ExecuTorch
-flow, install the matching converter plugin as well:
+flow, install the matching
+[converter plugin](https://github.com/arm/mlia-converters-pytorch) as well:
 
 ```bash
 pip install mlia-converters-pytorch
@@ -99,9 +100,28 @@ For supported ExecuTorch AOT flows, a PyTorch-originating run can look like:
 mlia check my_model.pt2 --target-profile ethos-u55-256 --performance --backend corstone-300
 ```
 
-Direct `.pt2` support depends on `mlia-converters-pytorch`, and the current
-Corstone ExecuTorch path is only available for selected target and backend
-combinations.
+Direct `.pt2` support depends on `mlia-converters-pytorch`. Corstone performance
+for ExecuTorch `.pte` models, including converted `.pt2` inputs, currently
+supports only these combinations:
+
+| Target | ExecuTorch performance backend |
+| --- | --- |
+| Ethos-U55 | `corstone-300` |
+| Ethos-U85 | `corstone-320` |
+| Ethos-U65 | Unsupported |
+
+For Ethos-U65, `--performance` on a PyTorch `.pt2` input is supported only
+through Vela:
+
+```bash
+mlia check my_model.pt2 --target-profile ethos-u65-256 --performance --backend vela
+```
+
+Vela provides compiler-based performance estimates. It does not run ExecuTorch
+`.pte` models; use the original `.pt2` input for this route. Ethos-U65 `.pte`
+performance is currently unsupported. These restrictions do not affect the
+TFLite Corstone performance path. See the
+[backend guide](docs/source/backends.md#executorch-performance-support) for details.
 
 The package depends on MLIA and is intended to be used as part of an MLIA
 installation rather than as a standalone CLI. See `pyproject.toml` for the

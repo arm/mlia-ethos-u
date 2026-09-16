@@ -83,6 +83,14 @@ def _summary_metric_value(field_name: str, value: float | int) -> float | int:
     """Return the MLIA output value for a Vela summary metric."""
     if field_name == schema.METRIC_NAME_INFERENCE_TIME:
         return value * 1000
+    if field_name in {
+        "sram_memory_used",
+        "dram_memory_used",
+        "on_chip_flash_memory_used",
+        "off_chip_flash_memory_used",
+    }:
+        # Vela summary memory usage is in KiB; other byte metrics are unscaled.
+        return value * 1024
     return value
 
 
@@ -949,10 +957,12 @@ def _performance_metrics(
         batch_inference_time=midpoint_inference_time * 1000,
         inferences_per_second=midpoint_fps,
         batch_size=summary_data.batch_size,
-        sram_memory_area_size=float(summary_data.sram_memory_used),
-        dram_memory_area_size=float(summary_data.dram_memory_used),
-        on_chip_flash_memory_area_size=float(summary_data.on_chip_flash_memory_used),
-        off_chip_flash_memory_area_size=float(summary_data.off_chip_flash_memory_used),
+        sram_memory_area_size=float(summary_data.sram_memory_used) * 1024,
+        dram_memory_area_size=float(summary_data.dram_memory_used) * 1024,
+        on_chip_flash_memory_area_size=float(summary_data.on_chip_flash_memory_used)
+        * 1024,
+        off_chip_flash_memory_area_size=float(summary_data.off_chip_flash_memory_used)
+        * 1024,
         layerwise_performance_info=layerwise_performance_info,
         additional_summary_metrics=_summary_metrics(summary_data),
     )

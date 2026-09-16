@@ -93,9 +93,10 @@ mlia check my_model.pte \
   --backend corstone-320
 ```
 
-This path is currently limited to supported target and backend combinations, so
-it should be treated as a Corstone-specific workflow rather than a replacement
-for the normal Vela-first LiteRT / TensorFlow Lite `.tflite` path.
+ExecuTorch performance is supported only on Ethos-U55 with `corstone-300` and
+Ethos-U85 with `corstone-320`. For Ethos-U65 `.pt2` inputs, use `--performance`
+with `--backend vela`; Ethos-U65 `.pte` performance is unsupported. See the
+[support matrix](backends.md#executorch-performance-support).
 
 ## JSON output
 
