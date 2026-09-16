@@ -1,11 +1,10 @@
 # SPDX-FileCopyrightText: Copyright 2026, Arm Limited and/or its affiliates.
 # SPDX-License-Identifier: Apache-2.0
 
-name: CI
+name: Lint
 
 on:
-  pull_request:
-  workflow_dispatch:
+  workflow_call:
 
 env:
   PYTHON_VERSION: "3.10"
@@ -25,11 +24,7 @@ env:
 
 jobs:
   lint:
-    uses: ./.github/workflows/lint.yml
-    secrets: inherit
-
-  build:
-    name: Build
+    name: Lint
     runs-on: ["${{ vars.UBUNTU_RUNNER }}", "X64"]
     steps:
       - name: Import secrets from Vault
@@ -45,46 +40,15 @@ jobs:
           namespace: iac-expkits/prod
           secrets: *vault-common-ci-secrets
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
-      - run: uv build
-
-  test_quick:
-    name: Quick Tests
-    runs-on: ["${{ vars.UBUNTU_RUNNER }}", "X64"]
-    steps:
-      - name: Import secrets from Vault
-        if: >-
-          ${{ github.event_name != 'pull_request' ||
-          github.event.pull_request.head.repo.full_name == github.repository }}
-        uses: hashicorp/vault-action@v4
+      - name: Cache pre-commit environments
+        uses: actions/cache@v5
         with:
-          url: ${{ secrets.VAULT_URL }}
-          method: approle
-          roleId: ${{ secrets.VAULT_ROLE_ID }}
-          secretId: ${{ secrets.VAULT_SECRET_ID }}
-          namespace: iac-expkits/prod
-          secrets: *vault-common-ci-secrets
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-      - run: uv sync --no-sources --group test
-      - run: |
-          set -o pipefail
-          uv run pytest -m "not slow" tests/ | tee coverage.txt
-      - name: Publish coverage summary
-        run: |
-          {
-            echo "## Coverage"
-            echo ""
-            echo '```text'
-            tail -n 20 coverage.txt
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-      - name: Upload coverage artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-report
-          path: coverage.xml
+          path: ~/.cache/pre-commit
+          key: pre-commit|${{ runner.os }}|${{ env.PYTHON_VERSION }}|${{ hashFiles('.pre-commit-config.yaml') }}
+      - run: uv sync --no-sources --group dev
+      - run: uv run pre-commit run --all-files
