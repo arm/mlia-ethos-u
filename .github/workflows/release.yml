@@ -38,7 +38,9 @@ jobs:
 
   blackduck_scan:
     name: Black Duck Scan
-    if: ${{ github.event.repository.private && github.ref_type == 'tag' }}
+    if: >-
+      ${{ github.event.repository.private &&
+      (github.ref == 'refs/heads/main' || github.ref_type == 'tag') }}
     uses: Arm-Debug/github-workflow-wizardry/.github/workflows/blackduck-full-scan.yml@24b734441123e62c1bb8fe180bf17efc0dec1d31
     with:
       project-version: ${{ github.ref_name }}
@@ -394,21 +396,25 @@ jobs:
             }
 
   sync_to_public_repo:
-    needs: publish_release
+    needs: [publish_release, blackduck_scan]
     if: >-
-      ${{ github.event.repository.private && github.event_name == 'push' &&
+      ${{ !cancelled() && needs.publish_release.result == 'success' &&
+      needs.blackduck_scan.result == 'success' &&
+      github.event.repository.private && github.event_name == 'push' &&
       github.ref == 'refs/heads/main' }}
-    uses: Arm-Debug/github-workflow-wizardry/.github/workflows/sync-to-public-repo.yml@d700621dafc25dea2b4c5d8531171af5ec8e00ee
+    uses: Arm-Debug/github-workflow-wizardry/.github/workflows/sync-to-public-repo.yml@ad4fe7516308ade29036e24d51f402cc86d78937
     with:
       public_repo: arm/mlia-ethos-u
     secrets: inherit
 
   sync_release_to_public_repo:
-    needs: create_github_release
+    needs: [create_github_release, blackduck_scan]
     if: >-
-      ${{ github.event.repository.private && github.event_name == 'push' &&
+      ${{ !cancelled() && needs.create_github_release.result == 'success' &&
+      needs.blackduck_scan.result == 'success' &&
+      github.event.repository.private && github.event_name == 'push' &&
       github.ref_type == 'tag' }}
-    uses: Arm-Debug/github-workflow-wizardry/.github/workflows/sync-to-public-repo.yml@d700621dafc25dea2b4c5d8531171af5ec8e00ee
+    uses: Arm-Debug/github-workflow-wizardry/.github/workflows/sync-to-public-repo.yml@ad4fe7516308ade29036e24d51f402cc86d78937
     with:
       public_repo: arm/mlia-ethos-u
     secrets: inherit
