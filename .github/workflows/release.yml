@@ -402,7 +402,7 @@ jobs:
       needs.blackduck_scan.result == 'success' &&
       github.event.repository.private && github.event_name == 'push' &&
       github.ref == 'refs/heads/main' }}
-    uses: Arm-Debug/github-workflow-wizardry/.github/workflows/sync-to-public-repo.yml@ad4fe7516308ade29036e24d51f402cc86d78937
+    uses: Arm-Debug/github-workflow-wizardry/.github/workflows/sync-to-public-repo.yml@c57b3276d78f9a98175551802d7f6e87c9c94816
     with:
       public_repo: arm/mlia-ethos-u
     secrets: inherit
@@ -414,7 +414,7 @@ jobs:
       needs.blackduck_scan.result == 'success' &&
       github.event.repository.private && github.event_name == 'push' &&
       github.ref_type == 'tag' }}
-    uses: Arm-Debug/github-workflow-wizardry/.github/workflows/sync-to-public-repo.yml@ad4fe7516308ade29036e24d51f402cc86d78937
+    uses: Arm-Debug/github-workflow-wizardry/.github/workflows/sync-to-public-repo.yml@c57b3276d78f9a98175551802d7f6e87c9c94816
     with:
       public_repo: arm/mlia-ethos-u
     secrets: inherit
