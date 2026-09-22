@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for attaching Ethos-U advice to complete standardized results."""
 
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -19,8 +20,24 @@ from mlia.target.ethos_u.performance import VelaPerformanceResult
 from mlia.target.ethos_u.result_advice import attach_result_advice
 
 
-def test_compatibility_advice_is_attached_to_its_result() -> None:
-    """Compatibility analysis should complete its own standardized result."""
+def _compatibility_output(tmp_path: Path, operators: Operators) -> dict[str, Any]:
+    """Build a canonical Ethos-U65 compatibility result for advice tests."""
+    model_path = tmp_path / "model.tflite"
+    model_path.write_bytes(b"model")
+    return operators.to_standardized_output(
+        model_path=model_path,
+        target_config={
+            "profile_name": "ethos-u65-256",
+            "target": "ethos-u65",
+            "mac": 256,
+        },
+    )
+
+
+def test_zero_support_advice_names_target_and_gives_next_steps(
+    tmp_path: Path,
+) -> None:
+    """A measured zero-support result should give a target-aware verdict."""
     operators = Operators(
         [
             Operator(
@@ -34,23 +51,40 @@ def test_compatibility_advice_is_attached_to_its_result() -> None:
             )
         ]
     )
-    output: dict[str, Any] = {
-        "results": [
-            {
-                "kind": "compatibility",
-                "status": "incompatible",
-                "producer": "vela",
-                "entities": [],
-            }
-        ]
-    }
+    output = _compatibility_output(tmp_path, operators)
     context = ExecutionContext(advice_category={AdviceCategory.COMPATIBILITY})
 
     attach_result_advice(output, operators, context)
 
     advice = output["results"][0]["advice"]
     assert advice
-    assert {item["category"] for item in advice} == {"compatibility"}
+    assert advice[0]["category"] == "compatibility"
+
+    assert advice[0]["message"] == (
+        "This model cannot be accelerated on Ethos-U65 in its current form: none of "
+        "the analyzed operators can run on the NPU. Either choose a different model "
+        "designed for Ethos-U65 and check it or, if your deployment hardware offers "
+        "another suitable target, check the model against that target's profile "
+        "before choosing it."
+    )
+
+
+def test_empty_operator_analysis_does_not_produce_zero_support_verdict(
+    tmp_path: Path,
+) -> None:
+    """Missing operator evidence should not be reported as zero support."""
+    operators = Operators([])
+    output = _compatibility_output(tmp_path, operators)
+    context = ExecutionContext(advice_category={AdviceCategory.COMPATIBILITY})
+
+    attach_result_advice(output, operators, context)
+
+    messages = " ".join(
+        advice["message"] for advice in output["results"][0].get("advice", [])
+    )
+    assert "cannot be accelerated" not in messages
+    assert "none of the analyzed operators" not in messages
+    assert "100% of operators" not in messages
 
 
 def test_performance_advice_is_attached_to_its_result() -> None:

@@ -40,6 +40,11 @@ from mlia.target.ethos_u.pattern_analysis import (
 class EthosUAdviceProducer(FactBasedAdviceProducer):
     """Ethos-U advice producer."""
 
+    def __init__(self, target_name: str | None = None) -> None:
+        """Init advice producer."""
+        super().__init__()
+        self.target_name = target_name
+
     @singledispatchmethod
     def produce_advice(self, data_item: DataItem) -> None:
         """Produce advice."""
@@ -70,13 +75,24 @@ class EthosUAdviceProducer(FactBasedAdviceProducer):
         self, data_item: HasUnsupportedOnNPUOperators
     ) -> None:
         """Advice for the unsupported operators."""
-        message = (
-            f"You have {data_item.npu_unsupported_ratio * 100:.0f}% of operators "
-            "that cannot be placed on the NPU. "
-            "For better performance, please review the reasons reported "
-            "in the table, and adjust the model accordingly "
-            "where possible."
-        )
+        if data_item.npu_unsupported_ratio == 1:
+            target_name = self.target_name or "the selected Ethos-U target"
+            message = (
+                f"This model cannot be accelerated on {target_name} in its current "
+                "form: none of the analyzed operators can run on the NPU. "
+                f"Either choose a different model designed for {target_name} and "
+                "check it or, if your deployment hardware offers another suitable "
+                "target, check the model against that target's profile before "
+                "choosing it."
+            )
+        else:
+            message = (
+                f"You have {data_item.npu_unsupported_ratio * 100:.0f}% of operators "
+                "that cannot be placed on the NPU. "
+                "For better performance, please review the reasons reported "
+                "in the table, and adjust the model accordingly "
+                "where possible."
+            )
         self.add_advice(
             message=message,
             category=SchemaAdviceCategory.COMPATIBILITY,

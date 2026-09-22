@@ -41,12 +41,37 @@ def _analyze_result(data_item: DataItem, max_pattern_passes: int = 5) -> list[Da
     return facts
 
 
-def _generate_advice(data_item: DataItem, context: Context) -> list[Advice]:
+def _target_name(output: dict[str, Any]) -> str | None:
+    """Return the display name of the selected Ethos-U target."""
+    target = output.get("target")
+    if not isinstance(target, dict):
+        return None
+
+    components = target.get("components")
+    if not isinstance(components, list):
+        return None
+
+    for component in components:
+        if not isinstance(component, dict) or component.get("type") != "npu":
+            continue
+        family = component.get("family")
+        if isinstance(family, str) and family.startswith("ethos-u"):
+            return family.replace("ethos-u", "Ethos-U", 1)
+
+    return None
+
+
+def _generate_advice(
+    data_item: DataItem, context: Context, target_name: str | None
+) -> list[Advice]:
     """Generate dynamic and static advice for one complete result."""
     facts = _analyze_result(data_item)
     advice: list[Advice] = []
 
-    for producer in (EthosUAdviceProducer(), EthosUStaticAdviceProducer()):
+    for producer in (
+        EthosUAdviceProducer(target_name),
+        EthosUStaticAdviceProducer(),
+    ):
         producer.set_context(context)
         for fact in facts:
             producer.produce_advice(fact)
@@ -73,7 +98,7 @@ def attach_result_advice(
             "Ethos-U advice generation requires one complete standardized result."
         )
 
-    advice = _generate_advice(analysis_data, context)
+    advice = _generate_advice(analysis_data, context, _target_name(output))
     if advice:
         results[0].setdefault("advice", []).extend(
             item.to_schema().to_dict() for item in advice

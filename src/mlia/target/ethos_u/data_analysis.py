@@ -242,6 +242,12 @@ class EthosUDataAnalyzer(FactExtractor):
     @analyze_data.register
     def analyze_operator_compatibility(self, operators: Operators) -> None:
         """Analyse operator compatibility information."""
+        # With no analyzed operators, there are no compatibility facts to produce.
+        # Return before the empty list's unsupported ratio of 1.0 is mistaken for
+        # evidence that every operator is unsupported.
+        if operators.total_number == 0:
+            return
+
         self._analyze_activation_function(operators)
         for operator in operators.ops:
             # Determine NPU placement
