@@ -49,6 +49,12 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - run: uv build
+      - name: Upload wheel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheel
+          path: dist/*.whl
+          if-no-files-found: error
 
   test_quick:
     name: Quick Tests
@@ -88,3 +94,64 @@ jobs:
         with:
           name: coverage-report
           path: coverage.xml
+
+  test_e2e:
+    name: End-to-End Tests (${{ matrix.name }})
+    needs: build
+    # Checkout and artifact downloads require secrets unavailable to fork PRs.
+    if: >-
+      ${{ (github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository) &&
+      github.repository_owner != 'arm' }}
+    runs-on: ["${{ vars.UBUNTU_RUNNER }}", "X64"]
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(vars.MLIA_E2E_TEST_CASES) }}
+    steps:
+      - name: Checkout plugin
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Download plugin wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: wheel
+          path: dist
+      - name: Import secrets from Vault
+        uses: hashicorp/vault-action@v4
+        with:
+          url: ${{ secrets.VAULT_URL }}
+          method: approle
+          roleId: ${{ secrets.VAULT_ROLE_ID }}
+          secretId: ${{ secrets.VAULT_SECRET_ID }}
+          namespace: iac-expkits/prod
+          secrets: |
+            ${{ env.VAULT_COMMON_CI_SECRETS }} ;
+            kv/data/MLIA/CI?version=${{ vars.VAULT_CI_SECRET_VERSION || '0' }} ARTIFACT_GIT_SOURCE_PASSWORD | ARTIFACT_GIT_SOURCE_PASSWORD ;
+            kv/data/MLIA/CI?version=${{ vars.VAULT_CI_SECRET_VERSION || '0' }} ARTIFACT_HTTP_SOURCE_TOKEN | ARTIFACT_HTTP_SOURCE_TOKEN
+      - name: Install e2e system dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git-lfs jq python3-dev
+      - name: Run MLIA e2e tests
+        id: e2e
+        uses: Arm-Debug/mlia-test-runner/.github/actions/mlia-e2e@5dc9c9d000d90aa024ee563213c3b3c9f9e588f7
+        with:
+          wheelPath: dist/*.whl
+          testCase: ${{ toJSON(matrix) }}
+          pythonVersion: "3.12"
+          httpSourceHost: ${{ vars.ARTIFACT_HTTP_SOURCE_HOST }}
+          httpSourceAuth: ${{ vars.ARTIFACT_HTTP_SOURCE_AUTH }}
+          httpSourceToken: ${{ env.ARTIFACT_HTTP_SOURCE_TOKEN }}
+          packageIndexUrl: ${{ env.UV_DEFAULT_INDEX }}
+          packageIndexUsername: ${{ env.UV_INDEX_INTERNAL_USERNAME }}
+          packageIndexPassword: ${{ env.UV_INDEX_INTERNAL_PASSWORD }}
+      - name: Upload e2e output
+        if: ${{ always() && steps.e2e.outputs.logsPath != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-output-${{ matrix.name }}
+          path: ${{ steps.e2e.outputs.logsPath }}
+          if-no-files-found: warn
