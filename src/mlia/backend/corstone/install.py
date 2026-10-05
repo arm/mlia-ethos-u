@@ -18,8 +18,8 @@ from mlia.backend.install import (
     PackagePathChecker,
     StaticPathChecker,
 )
+from mlia.backend.corstone.boundaries.process import run_installer_with_notice
 from mlia.utils.download import DownloadConfig
-from mlia.utils.filesystem import working_directory
 
 logger = logging.getLogger(__name__)
 
@@ -119,42 +119,40 @@ class CorstoneInstaller:
 
     def __call__(self, eula_agreement: bool, dist_dir: Path) -> Path:
         """Install Corstone and return path to the models."""
-        with working_directory(dist_dir):
-            install_dir = self.name
+        install_dir = self.name
 
-            if self.name == "corstone-300":
-                fvp = "./FVP_Corstone_SSE-300.sh"
-            elif self.name == "corstone-310":
-                fvp = "./FVP_Corstone_SSE-310.sh"
-            elif self.name == "corstone-320":
-                fvp = "./FVP_Corstone_SSE-320.sh"
-            else:
-                raise RuntimeError(
-                    f"Couldn't find fvp file during '{self.name}' installation"
-                )
+        if self.name == "corstone-300":
+            fvp = "./FVP_Corstone_SSE-300.sh"
+        elif self.name == "corstone-310":
+            fvp = "./FVP_Corstone_SSE-310.sh"
+        elif self.name == "corstone-320":
+            fvp = "./FVP_Corstone_SSE-320.sh"
+        else:
+            raise RuntimeError(
+                f"Couldn't find fvp file during '{self.name}' installation"
+            )
 
-            try:
-                fvp_install_cmd = [
-                    fvp,
-                    "-q",
-                    "-d",
-                    install_dir,
+        try:
+            fvp_install_cmd = [
+                fvp,
+                "-q",
+                "-d",
+                install_dir,
+            ]
+
+            if eula_agreement:
+                fvp_install_cmd += [
+                    "--nointeractive",
+                    "--i-agree-to-the-contained-eula",
                 ]
 
-                if eula_agreement:
-                    fvp_install_cmd += [
-                        "--nointeractive",
-                        "--i-agree-to-the-contained-eula",
-                    ]
+            run_installer_with_notice(logger, self.name, dist_dir, fvp_install_cmd)
+        except subprocess.CalledProcessError as err:
+            raise RuntimeError(
+                f"Error occurred during '{self.name}' installation"
+            ) from err
 
-                # The command is assembled from installer metadata and fixed flags.
-                subprocess.check_call(fvp_install_cmd)
-            except subprocess.CalledProcessError as err:
-                raise RuntimeError(
-                    f"Error occurred during '{self.name}' installation"
-                ) from err
-
-            return dist_dir / install_dir
+        return dist_dir / install_dir
 
 
 def get_corstone_installation(corstone_name: str) -> Installation | None:

@@ -5,16 +5,20 @@
 from __future__ import annotations
 
 import base64
+import logging
 import os
 import subprocess
+from collections.abc import Generator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Generator
 from unittest.mock import MagicMock
 
-import pytest
-
 import mlia.core.output_schema as schema
+import pytest
+from mlia.backend.errors import BackendExecutionFailed
+from mlia.core.output_validation import validate_standardized_output
+from mlia.utils.proc import Command
+
 from mlia.backend.corstone.performance import (
     CorstoneModelPerformanceMetrics,
     CorstonePerformanceMetrics,
@@ -25,9 +29,6 @@ from mlia.backend.corstone.performance import (
     get_generic_inference_app_path,
     get_metrics,
 )
-from mlia.backend.errors import BackendExecutionFailed
-from mlia.core.output_validation import validate_standardized_output
-from mlia.utils.proc import Command
 
 
 def encode_b64(data: str) -> str:
@@ -456,6 +457,7 @@ def test_get_metrics_parse_failure_preserves_missing_metric(
     is_pte: bool,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Missing metrics without runner errors remain a report parsing failure."""
     monkeypatch.setattr(
@@ -463,13 +465,16 @@ def test_get_metrics_parse_failure_preserves_missing_metric(
         MagicMock(return_value=Command(["fvp"])),
     )
     monkeypatch.setattr(
-        "mlia.backend.corstone.performance.process_command_output",
+        "mlia.backend.corstone.boundaries.process.process_command_output",
         MagicMock(),
     )
 
-    with pytest.raises(
-        ValueError,
-        match="Unable to parse output and get metrics: .*NPU ACTIVE",
+    with (
+        caplog.at_level(logging.INFO, logger="mlia.backend.corstone.performance"),
+        pytest.raises(
+            ValueError,
+            match="Unable to parse output and get metrics: .*NPU ACTIVE",
+        ),
     ):
         get_metrics(
             CorstoneRunConfig(
@@ -483,6 +488,14 @@ def test_get_metrics_parse_failure_preserves_missing_metric(
                 "default",
             )
         )
+
+    record = next(
+        record
+        for record in caplog.records
+        if "Running Corstone backend" in record.message
+    )
+    assert getattr(record, "boundary_action", False) is True
+    assert str(tmp_path) in record.message
 
 
 @pytest.mark.parametrize(

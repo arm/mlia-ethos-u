@@ -15,14 +15,18 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any
 
-import mlia
 import mlia.core.output_schema as schema
 from mlia.backend.errors import BackendExecutionFailed
 from mlia.backend.repo import get_backend_repository
+from mlia.backend.corstone.boundaries.process import (
+    process_backend_output_with_notice,
+)
+from mlia.utils.filesystem import get_mlia_resource_dirs, get_mlia_resources, sha256
+from mlia.utils.proc import Command, OutputLogger
+
+import mlia
 from mlia.target.ethos_u.performance_warnings import NPU_ONLY_PERFORMANCE_WARNING
 from mlia.target.ethos_u.utils.model_format import is_pte_file
-from mlia.utils.filesystem import get_mlia_resource_dirs, get_mlia_resources, sha256
-from mlia.utils.proc import Command, OutputLogger, process_command_output
 
 logger = logging.getLogger(__name__)
 
@@ -552,7 +556,7 @@ def get_metrics(cfg: CorstoneRunConfig) -> CorstonePerformanceMetrics:
     """Run generic inference and return perf metrics."""
     try:
         command = build_corstone_command(cfg)
-    except Exception as err:  # noqa: BLE001 - we want to wrap any construction errors
+    except Exception as err:
         raise BackendExecutionFailed(
             f"Unable to construct a command line for {cfg.fvp}"
         ) from err
@@ -562,7 +566,10 @@ def get_metrics(cfg: CorstoneRunConfig) -> CorstonePerformanceMetrics:
     failure_context = f"Backend execution failed. {cfg.fvp}, model '{cfg.model}': "
 
     try:
-        process_command_output(
+        process_backend_output_with_notice(
+            logger,
+            cfg.fvp,
+            cfg.output_dir,
             command,
             [output_parser, output_logger],
         )

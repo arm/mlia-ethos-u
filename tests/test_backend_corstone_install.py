@@ -4,20 +4,20 @@
 
 from __future__ import annotations
 
+import logging
 import platform
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, call
 
 import pytest
+from mlia.backend.install import BackendInstallation, Installation, PackagePathChecker
 
 from mlia.backend.corstone.install import (
     CorstoneFVP,
     CorstoneInstaller,
     get_corstone_installation,
 )
-from mlia.backend.install import BackendInstallation, PackagePathChecker
-from mlia.backend.install import Installation
 
 
 @pytest.mark.parametrize(
@@ -229,19 +229,31 @@ def test_corstone_installer(
     corstone_name: str,
     eula_agreement: bool,
     expected_calls: Any,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Test Corstone installer."""
     mock_check_call = MagicMock()
 
     monkeypatch.setattr(
-        "mlia.backend.corstone.install.subprocess.check_call", mock_check_call
+        "mlia.backend.corstone.boundaries.process.subprocess.check_call",
+        mock_check_call,
     )
 
     installer = CorstoneInstaller(name=corstone_name)
-    installer(eula_agreement, tmp_path)
+    with caplog.at_level(logging.INFO, logger="mlia.backend.corstone.install"):
+        installer(eula_agreement, tmp_path)
 
     # Incorrect installer name
     with pytest.raises(RuntimeError):
         CorstoneInstaller(name="bad_name")(eula_agreement, tmp_path)
 
-    assert mock_check_call.mock_calls == expected_calls
+    assert [item.args[0] for item in mock_check_call.mock_calls] == [
+        item.args[0] for item in expected_calls
+    ]
+    assert all(item.kwargs == {"cwd": tmp_path} for item in mock_check_call.mock_calls)
+    record = next(
+        record for record in caplog.records if "Running downloaded" in record.message
+    )
+    assert getattr(record, "boundary_action", False) is True
+    assert corstone_name in record.message
+    assert str(tmp_path) in record.message
