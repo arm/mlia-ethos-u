@@ -5,6 +5,11 @@ name: End-to-End Tests
 
 on:
   workflow_dispatch:
+    inputs:
+      test-config-ref:
+        description: Branch, tag, or commit of Arm-Debug/mlia-test-config (defaults to main)
+        type: string
+        required: false
   workflow_call:
     inputs:
       wheel-artifact:
@@ -12,6 +17,10 @@ on:
         type: string
         required: false
         default: ""
+      test-config-ref:
+        description: Branch, tag, or commit of Arm-Debug/mlia-test-config (defaults to main)
+        type: string
+        required: false
 
 permissions:
   contents: read
@@ -63,14 +72,45 @@ jobs:
           path: dist/*.whl
           if-no-files-found: error
 
+  prepare_e2e:
+    name: Load End-to-End Test Cases
+    if: ${{ github.repository_owner != 'arm' }}
+    runs-on: ${{ fromJSON(vars.UBUNTU_RUNNER_X64) }}
+    outputs:
+      test_cases: ${{ steps.cases.outputs.MLIA_E2E_TEST_CASES }}
+    steps:
+      - name: Checkout e2e configuration
+        uses: actions/checkout@v4
+        with:
+          repository: Arm-Debug/mlia-test-config
+          ref: ${{ inputs.test-config-ref || 'main' }}
+          token: ${{ secrets.GH_ADMIN_TOKEN }}
+          path: mlia-test-config
+          persist-credentials: false
+      - name: Install JSON parser
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
+      - name: Read test cases
+        id: cases
+        shell: bash
+        working-directory: mlia-test-config/mlia-ethos-u
+        run: |
+          set -euo pipefail
+          cases=$(jq -ce '
+            if type == "array" and length > 0 and all(.[]; type == "object")
+            then . else error("Expected a non-empty array of test cases") end
+          ' MLIA_E2E_TEST_CASES.json)
+          printf 'MLIA_E2E_TEST_CASES=%s\n' "$cases" >> "$GITHUB_OUTPUT"
+
   test_e2e:
     name: End-to-End Tests (${{ matrix.test_case.name }}, ${{ matrix.runner.platform }} - ${{ matrix.runner.arch }})
-    needs: build
     # A caller-provided wheel skips the build job but must still run the tests.
     if: >-
       ${{ !cancelled() && github.repository_owner != 'arm' &&
       (needs.build.result == 'success' ||
       (inputs.wheel-artifact != '' && needs.build.result == 'skipped')) }}
+    needs: [build, prepare_e2e]
     runs-on: ${{ fromJSON(matrix.runner.labels) }}
     strategy:
       fail-fast: false
@@ -83,7 +123,7 @@ jobs:
           - labels: ${{ vars.UBUNTU_RUNNER_ARM64 }}
             platform: linux
             arch: ARM64
-        test_case: ${{ fromJSON(vars.MLIA_E2E_TEST_CASES) }}
+        test_case: ${{ fromJSON(needs.prepare_e2e.outputs.test_cases) }}
     steps:
       - name: Checkout plugin
         uses: actions/checkout@v4
