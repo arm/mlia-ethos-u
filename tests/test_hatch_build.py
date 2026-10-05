@@ -1,13 +1,46 @@
 # SPDX-FileCopyrightText: Copyright 2026, Arm Limited and/or its affiliates.
 # SPDX-License-Identifier: Apache-2.0
-"""Tests for Hatchling metadata hooks."""
+"""Tests for Hatchling metadata and wheel build hooks."""
 
+from email.parser import Parser
 from pathlib import Path
+import shutil
+import tomllib
 from unittest.mock import Mock
+from zipfile import ZipFile
 
 import pytest
+from hatchling.builders.wheel import WheelBuilder
 
 from hatch_build import MetadataHook
+
+
+def test_wheel_build_uses_python_312_tag(tmp_path: Path) -> None:
+    """The configured hook must tag both the filename and wheel metadata."""
+    # Build wheel in a tmp dir and check
+    # python tag
+    root = Path(__file__).resolve().parents[1]
+    project_config = tomllib.loads(
+        (root / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    config = {
+        "project": {"name": "wheel-fixture", "version": "1.0"},
+        "tool": {"hatch": {"build": project_config["tool"]["hatch"]["build"]}},
+    }
+    shutil.copy2(root / "hatch_build.py", tmp_path / "hatch_build.py")
+    package = tmp_path / "src" / "mlia-ethos-u"
+    package.mkdir(parents=True)
+    (package / "__init__.py").touch()
+
+    builder = WheelBuilder(str(tmp_path), config=config)
+    [wheel_path] = builder.build(directory=str(tmp_path / "dist"))
+
+    assert Path(wheel_path).name == "wheel_fixture-1.0-py312-none-any.whl"
+    with ZipFile(wheel_path) as wheel:
+        metadata = Parser().parsestr(
+            wheel.read("wheel_fixture-1.0.dist-info/WHEEL").decode("utf-8")
+        )
+        assert metadata.get_all("Tag") == ["py312-none-any"]
 
 
 def test_metadata_hook_update_uses_commit_hash(

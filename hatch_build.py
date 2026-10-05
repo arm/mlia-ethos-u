@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: Copyright 2026, Arm Limited and/or its affiliates.
 # SPDX-License-Identifier: Apache-2.0
-"""Hatchling hook used to customize package metadata."""
+"""Hatchling hooks used to customize package metadata and wheel tags."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import subprocess
 from pathlib import Path
 from string import Template
 
+from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 from hatchling.metadata.plugin.interface import MetadataHookInterface
 
 
@@ -67,6 +68,14 @@ def _get_revision_fallback(version: str) -> str:
     """Extract the commit hash from a development version when available."""
     match = re.fullmatch(r"\d+\.\d+\.\d+\.dev\d+\+([A-Za-z0-9]+)", version)
     return match.group(1) if match else f"v{version}"
+
+
+class WheelBuildHook(BuildHookInterface):
+    """Set python tag to py312."""
+
+    def initialize(self, version: str, build_data: dict) -> None:
+        """Set python tag to py312."""
+        build_data["tag"] = "py312-none-any"
 
 
 class MetadataHook(MetadataHookInterface):
