@@ -7,7 +7,7 @@ dynamic = ["version", "readme"]
 description = "ML Inference Advisor Ethos Plugin"
 requires-python = ">=3.12"
 dependencies = [
-    "mlia==0.12.2"
+    "mlia>=0.12.2,<0.13"
 ]
 keywords = ["ml", "arm", "ethos", "tflite"]
 authors = [{name = "Arm Ltd", email = "mlia@arm.com"}]
