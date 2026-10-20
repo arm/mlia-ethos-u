@@ -15,6 +15,12 @@ The package is distributed as `mlia-ethos-u` and contributes:
 - The Corstone backend plugin, which registers target-specific Corstone backends.
 - Bundled Ethos-U target profiles and Vela configuration assets.
 
+> Start here: Arm Learning Path
+>
+> [Analyze machine learning models for Arm Ethos-U with Arm ML Inference Advisor](https://learn.arm.com/learning-paths/embedded-and-microcontrollers/analyze-ethos-u-models-with-mlia/)
+> is a hands-on guide to discovering target profiles and backends, checking model
+> compatibility, and interpreting Vela estimates and Corstone performance results.
+
 ## Table of Contents
 
 - [Overview](#overview)
