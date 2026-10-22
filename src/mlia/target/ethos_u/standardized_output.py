@@ -13,9 +13,11 @@ import mlia
 import mlia.core.output_schema as schema
 from mlia.backend.corstone import is_corstone_backend
 from mlia.core.errors import ConfigurationError
+from mlia.target.ethos_u.advice_generation import EthosUAdviceProducer
 from mlia.target.ethos_u.config import EthosUConfiguration
 from mlia.target.ethos_u.performance import (
     MemorySizeType,
+    NpuPerformanceUnavailableError,
     OptimizationPerformanceMetrics,
     PerformanceMetrics,
 )
@@ -69,6 +71,41 @@ def build_tflite_compatibility_output(
             )
         ],
         results=[result],
+        cli_arguments=cli_arguments,
+    )
+
+
+def build_corstone_performance_error_output(
+    model_path: Path,
+    target_config: EthosUConfiguration,
+    backend_name: str,
+    backend_configuration: dict[str, Any],
+    error: NpuPerformanceUnavailableError,
+    cli_arguments: list[str],
+) -> dict[str, Any]:
+    """Build a Corstone performance result when no operations map to the NPU."""
+    advice_producer = EthosUAdviceProducer()
+    advice_producer.produce_advice(error)
+    return _standardized_output(
+        model_path,
+        target_config,
+        backends=[
+            schema.Backend(
+                id=backend_name,
+                name=backend_name.replace("-", " ").title(),
+                version="unknown",
+                configuration=backend_configuration,
+            )
+        ],
+        results=[
+            schema.Result(
+                kind=schema.ResultKind.PERFORMANCE,
+                status=schema.ResultStatus.INCOMPATIBLE,
+                producer=backend_name,
+                errors=[str(error)],
+                advice=[advice.to_schema() for advice in advice_producer.advice],
+            )
+        ],
         cli_arguments=cli_arguments,
     )
 

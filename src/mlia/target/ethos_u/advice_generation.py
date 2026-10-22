@@ -29,6 +29,7 @@ from mlia.target.ethos_u.data_analysis import (
     HasUnsupportedOnNPUOperators,
     OptimizationResults,
 )
+from mlia.target.ethos_u.performance import NpuPerformanceUnavailableError
 from mlia.target.ethos_u.pattern_analysis import (
     HighImpactLayersPattern,
     IneffectiveActivationPattern,
@@ -121,6 +122,27 @@ class EthosUAdviceProducer(FactBasedAdviceProducer):
             message=message,
             category=SchemaAdviceCategory.COMPATIBILITY,
             severity=AdviceSeverity.INFO,
+        )
+
+    @produce_advice.register
+    def handle_npu_performance_unavailable(
+        self, data_item: NpuPerformanceUnavailableError
+    ) -> None:
+        """Advice when a compiled model has no operations mapped to Ethos-U."""
+        message = (
+            "Run with '--compatibility' on the source model to investigate "
+            "unsupported operators and configurations."
+        )
+        if data_item.has_fp32:
+            message += (
+                " The compiled model also references FP32 tensors. "
+                "FP32 computation must be quantized to a supported integer format "
+                "to run on Ethos-U."
+            )
+        self.add_advice(
+            message=message,
+            category=SchemaAdviceCategory.COMPATIBILITY,
+            severity=AdviceSeverity.WARNING,
         )
 
     @produce_advice.register

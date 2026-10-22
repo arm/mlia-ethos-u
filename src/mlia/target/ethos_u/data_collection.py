@@ -37,6 +37,7 @@ from mlia.target.ethos_u.performance import (
 )
 from mlia.target.ethos_u.result_advice import attach_result_advice
 from mlia.target.ethos_u.standardized_output import (
+    build_corstone_performance_error_output,
     build_optimization_performance_output,
     build_tflite_compatibility_output,
     model_metadata,
@@ -304,19 +305,31 @@ class EthosUPerformance(ContextAwareDataCollector):
         )
         corstone_result = None
         if corstone_backend is not None:
-            if performance.corstone_metrics is None:
+            if performance.corstone_error is not None:
+                corstone_output = build_corstone_performance_error_output(
+                    self.model,
+                    self.target_config,
+                    corstone_backend,
+                    _corstone_backend_configuration(
+                        corstone_backend, self.target_config
+                    ),
+                    performance.corstone_error,
+                    cli_args,
+                )
+            elif performance.corstone_metrics is None:
                 raise ConfigurationError(
                     f"{corstone_backend} performance metrics were not produced by "
                     "the estimator."
                 )
-            corstone_output = performance.to_standardized_output(
-                model_path=serialization_model,
-                backend_name=corstone_backend,
-                cli_arguments=cli_args,
-                backend_config=_corstone_backend_configuration(
-                    corstone_backend, self.target_config
-                ),
-            )
+            else:
+                corstone_output = performance.to_standardized_output(
+                    model_path=serialization_model,
+                    backend_name=corstone_backend,
+                    cli_arguments=cli_args,
+                    backend_config=_corstone_backend_configuration(
+                        corstone_backend, self.target_config
+                    ),
+                )
             if not isinstance(corstone_output, dict):
                 raise ConfigurationError(
                     f"{corstone_backend} performance serialization did not produce "
@@ -324,7 +337,8 @@ class EthosUPerformance(ContextAwareDataCollector):
                 )
             corstone_output["model"] = output_model.copy()
             corstone_result = CorstonePerformanceResult(corstone_output)
-            attach_result_advice(corstone_output, corstone_result, self.context)
+            if performance.corstone_error is None:
+                attach_result_advice(corstone_output, corstone_result, self.context)
 
         if vela_result is not None and corstone_result is not None:
             return CombinedPerformanceResult(
@@ -371,6 +385,11 @@ class EthosUOptimizationPerformance(OptimizingPerformaceDataCollector):
             original_perf_metrics=cast(PerformanceMetrics, original_metrics),
             optimizations_perf_metrics=cast(Any, optimizations_perf_metrics),
         )
+        if comparison.original_perf_metrics.corstone_error is not None:
+            raise comparison.original_perf_metrics.corstone_error
+        for _, performance in comparison.optimizations_perf_metrics:
+            if performance.corstone_error is not None:
+                raise performance.corstone_error
         cli_args = [Path(sys.argv[0]).name] + sys.argv[1:] if sys.argv else []
         standardized_output = build_optimization_performance_output(
             self.model,

@@ -176,6 +176,8 @@ def get_test_keras_model_no_activation() -> keras.Model:
 TEST_MODEL_KERAS_FILE = "test_model.h5"
 TEST_MODEL_TFLITE_FP32_FILE = "test_model_fp32.tflite"
 TEST_MODEL_TFLITE_INT8_FILE = "test_model_int8.tflite"
+TEST_MODEL_TFLITE_INT64_FILE = "test_model_int64.tflite"
+TEST_MODEL_TFLITE_NPU_FILE = "test_model_npu.tflite"
 TEST_MODEL_TFLITE_NO_ACT_FILE = "test_model_no_act.tflite"
 TEST_MODEL_TFLITE_VELA_FILE = "test_model_vela.tflite"
 TEST_MODEL_TF_SAVED_MODEL_FILE = "tf_model_test_model"
@@ -214,6 +216,37 @@ def fixture_test_models_path(
 
     tf.saved_model.save(keras_model, str(tmp_path / TEST_MODEL_TF_SAVED_MODEL_FILE))
 
+    # Small quantized model with NPU operations
+    npu_model = keras.Sequential(
+        [
+            keras.Input(shape=(4,), batch_size=1),
+            keras.layers.Dense(2, kernel_initializer="ones"),
+        ]
+    )
+    converter = tf.lite.TFLiteConverter.from_keras_model(npu_model)
+    converter.optimizations = [tf.lite.Optimize.DEFAULT]
+    converter.representative_dataset = lambda: iter(
+        [
+            [np.ones(npu_model.input_shape, dtype=np.float32)],
+            [np.zeros(npu_model.input_shape, dtype=np.float32)],
+        ]
+    )
+    converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
+    (tmp_path / TEST_MODEL_TFLITE_NPU_FILE).write_bytes(converter.convert())
+
+    # CPU-only INT64 model
+    int64_model = keras.Sequential(
+        [
+            keras.Input(shape=(2, 2), batch_size=1, dtype="int64"),
+            keras.layers.Flatten(dtype="int64"),
+        ]
+    )
+    convert_to_tflite(
+        int64_model,
+        quantized=False,
+        output_path=tmp_path / TEST_MODEL_TFLITE_INT64_FILE,
+    )
+
     invalid_tflite_model = tmp_path / TEST_MODEL_INVALID_FILE
     invalid_tflite_model.touch()
 
@@ -238,6 +271,18 @@ def fixture_test_tflite_model(test_models_path: Path) -> Path:
 def fixture_test_tflite_model_fp32(test_models_path: Path) -> Path:
     """Return test TensorFlow Lite model."""
     return test_models_path / TEST_MODEL_TFLITE_FP32_FILE
+
+
+@pytest.fixture(scope="session", name="test_tflite_model_npu")
+def fixture_test_tflite_model_npu(test_models_path: Path) -> Path:
+    """Return a small quantized TFLite model that maps to Ethos-U."""
+    return test_models_path / TEST_MODEL_TFLITE_NPU_FILE
+
+
+@pytest.fixture(scope="session", name="test_tflite_model_int64")
+def fixture_test_tflite_model_int64(test_models_path: Path) -> Path:
+    """Return a small model with CPU-only INT64 data."""
+    return test_models_path / TEST_MODEL_TFLITE_INT64_FILE
 
 
 @pytest.fixture(scope="session", name="test_tflite_vela_model")

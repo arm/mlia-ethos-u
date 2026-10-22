@@ -7,8 +7,9 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from enum import Enum
+from itertools import chain
 from pathlib import Path
-from typing import Any, Union
+from typing import TYPE_CHECKING, Any, Union
 
 import mlia.backend.vela.compiler as vela_comp
 import mlia.backend.vela.performance as vela_perf
@@ -39,6 +40,9 @@ from mlia.target.ethos_u.utils.model_format import (
 from mlia.transformers.registry import TransformRequest, transform_model
 from mlia.transformers.error import TransformerNotFoundError
 from mlia.utils.logging import log_action
+
+if TYPE_CHECKING:
+    from ethosu.vela.tflite.Model import Model as TFLiteModel
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +98,7 @@ class PerformanceMetrics:
     memory_usage: MemoryUsage | None
     layerwise_perf_info: LayerwisePerfInfo | None
     corstone_metrics: Any = None  # Backend PerformanceMetrics for standardized output
+    corstone_error: NpuPerformanceUnavailableError | None = None
 
     def to_standardized_output(
         self,
@@ -291,6 +296,41 @@ class VelaPerformanceEstimator(
             )
 
 
+class NpuPerformanceUnavailableError(ConfigurationError):
+    """Raised when NPU estimation is unavailable because the compiled model has no NPU work."""
+
+    def __init__(self, message: str, has_fp32: bool) -> None:
+        """Store FP32 information for advice generation."""
+        super().__init__(message)
+        self.has_fp32 = has_fp32
+
+
+def _cpu_only_tflite_has_fp32(model: TFLiteModel) -> bool | None:
+    """Check for FP32 tensors when no operations are mapped to Ethos-U.
+
+    Return None if any operator is mapped to Ethos-U. Otherwise, return whether
+    any operator's input or output tensor is FP32.
+    """
+    from ethosu.vela.tflite.TensorType import TensorType
+
+    has_fp32 = False
+    for subgraph_index in range(model.SubgraphsLength()):
+        subgraph = model.Subgraphs(subgraph_index)
+        for operator_index in range(subgraph.OperatorsLength()):
+            operator = subgraph.Operators(operator_index)
+            if model.OperatorCodes(operator.OpcodeIndex()).CustomCode() == b"ethos-u":
+                return None
+            if not has_fp32:
+                has_fp32 = any(
+                    index != -1 and subgraph.Tensors(index).Type() == TensorType.FLOAT32
+                    for index in chain(
+                        (operator.Inputs(i) for i in range(operator.InputsLength())),
+                        (operator.Outputs(i) for i in range(operator.OutputsLength())),
+                    )
+                )
+    return has_fp32
+
+
 class CorstonePerformanceEstimator(
     PerformanceEstimator[Union[Path, ModelConfiguration], NPUCycles]
 ):
@@ -398,6 +438,17 @@ class CorstonePerformanceEstimator(
                     model_path, self.target_config.compiler_options
                 )
 
+                from ethosu.vela.tflite.Model import Model as TFLiteModel
+
+                compiled_model = TFLiteModel.GetRootAs(prepared_model_path.read_bytes())
+                has_fp32 = _cpu_only_tflite_has_fp32(compiled_model)
+                if has_fp32 is not None:
+                    raise NpuPerformanceUnavailableError(
+                        f"Cannot estimate NPU performance for '{self.target_config.target}' "
+                        f"using '{self.backend}': no operations were mapped to Ethos-U.",
+                        has_fp32,
+                    )
+
             corstone_perf_metrics = estimate_performance(
                 self.target_config.target,
                 self.target_config.mac,
@@ -488,6 +539,7 @@ class EthosUPerformanceEstimator(
         npu_cycles = None
         layerwise_perf_info = None
         corstone_metrics = None
+        corstone_error = None
         vela_perf_metrics = None
         for backend in self.backends:
             if backend == "vela":
@@ -511,16 +563,23 @@ class EthosUPerformanceEstimator(
                     self.context, self.target_config, backend
                 )
                 # Get NPUCycles for legacy display and save the raw backend metrics
-                npu_cycles = corstone_estimator.estimate(model_to_estimate)
-                # Store the original corstone backend metrics for standardized output
-                corstone_metrics = corstone_estimator.backend_metrics
+                try:
+                    npu_cycles = corstone_estimator.estimate(model_to_estimate)
+                except NpuPerformanceUnavailableError as err:
+                    corstone_error = err
+                else:
+                    corstone_metrics = corstone_estimator.backend_metrics
             else:
                 logger.warning(
                     "Backend '%s' is not supported for Ethos-U performance estimation.",
                     backend,
                 )
         perf = PerformanceMetrics(
-            self.target_config, npu_cycles, memory_usage, layerwise_perf_info
+            self.target_config,
+            npu_cycles,
+            memory_usage,
+            layerwise_perf_info,
+            corstone_error=corstone_error,
         )
 
         # Attach vela raw metrics object so callers can build standardized output

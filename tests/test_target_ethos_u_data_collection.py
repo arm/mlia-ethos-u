@@ -37,6 +37,7 @@ from mlia.target.ethos_u.performance import (
     CorstonePerformanceResult,
     MemoryUsage,
     NPUCycles,
+    NpuPerformanceUnavailableError,
     OptimizationPerformanceResult,
     PerformanceMetrics,
     VelaPerformanceResult,
@@ -391,6 +392,76 @@ def test_performance_collector_with_both_backends(
     assert len(result.standardized_output["backends"]) == 2
     # Check that both results are present
     assert len(result.standardized_output["results"]) == 2
+
+
+@pytest.mark.parametrize("has_fp32", [True, False], ids=["fp32", "integer"])
+@pytest.mark.parametrize(
+    "backends",
+    [["corstone-300"], ["vela", "corstone-300"]],
+    ids=["corstone", "vela-and-corstone"],
+)
+def test_performance_collector_reports_npu_error_and_advice(
+    monkeypatch: pytest.MonkeyPatch,
+    sample_context: ExecutionContext,
+    test_tflite_model: Path,
+    has_fp32: bool,
+    backends: list[str],
+) -> None:
+    """Preserve Corstone errors and advice alongside available Vela results."""
+    target = EthosUConfiguration.load_profile("ethos-u55-128")
+    mock_corstone_backend_configuration(monkeypatch)
+    if "vela" in backends:
+        vela_metrics = VelaPerf(
+            npu_cycles=3,
+            sram_access_cycles=1,
+            dram_access_cycles=2,
+            on_chip_flash_access_cycles=3,
+            off_chip_flash_access_cycles=4,
+            total_cycles=4,
+            batch_inference_time=1.0,
+            inferences_per_second=1000.0,
+            batch_size=1,
+            sram_memory_area_size=1,
+            dram_memory_area_size=2,
+            on_chip_flash_memory_area_size=3,
+            off_chip_flash_memory_area_size=4,
+            layerwise_performance_info=LayerwisePerfInfo(layerwise_info=[]),
+        )
+        monkeypatch.setattr(
+            "mlia.target.ethos_u.performance.vela_perf.estimate_performance",
+            MagicMock(return_value=vela_metrics),
+        )
+    error = NpuPerformanceUnavailableError(
+        "Cannot estimate NPU performance: no operations were mapped to Ethos-U.",
+        has_fp32,
+    )
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.performance.CorstonePerformanceEstimator.estimate",
+        MagicMock(side_effect=error),
+    )
+    sample_context.advice_category = {AdviceCategory.PERFORMANCE}
+    collector = EthosUPerformance(test_tflite_model, target, backends=backends)
+    collector.set_context(sample_context)
+
+    collected = collector.collect_data()
+    output = collected.standardized_output
+
+    validate_standardized_output(output)
+    results = {result["producer"]: result for result in output["results"]}
+    if "vela" in backends:
+        vela = results["vela"]
+        assert vela["status"] == "ok"
+        metrics = {metric["name"]: metric for metric in vela["metrics"]}
+        assert metrics["total_cycles"]["value"] == 4
+
+    corstone = results["corstone-300"]
+    assert corstone["status"] == "incompatible"
+    assert corstone["errors"] == [str(error)]
+    assert "metrics" not in corstone
+    [advice] = corstone["advice"]
+    assert (advice["category"], advice["severity"]) == ("compatibility", "warning")
+    assert "--compatibility" in advice["message"]
+    assert ("FP32" in advice["message"]) is has_fp32
 
 
 def test_performance_collector_rejects_multiple_corstone_backends(
@@ -782,6 +853,20 @@ def test_optimization_factory_returns_complete_result(tmp_path: Path) -> None:
     assert "NPU total cycles" in corstone_advice
     assert "SRAM used" not in corstone_advice
     assert "DRAM used" not in corstone_advice
+
+
+def test_optimization_propagates_unavailable_corstone_performance() -> None:
+    """Raise a Corstone error from an optimized model."""
+    target = EthosUConfiguration.load_profile("ethos-u55-256")
+    original = PerformanceMetrics(target, NPUCycles(1, 2, 3, 4, 5, 6), None, None)
+    error = NpuPerformanceUnavailableError("No NPU operations", has_fp32=True)
+    optimized = PerformanceMetrics(target, None, None, None, corstone_error=error)
+
+    collector = object.__new__(EthosUOptimizationPerformance)
+    with pytest.raises(NpuPerformanceUnavailableError) as caught:
+        collector.create_optimization_performance_metrics(original, [([], optimized)])
+
+    assert caught.value is error
 
 
 def test_optimization_estimator_records_effective_backend_configurations(

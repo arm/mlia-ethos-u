@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from mlia.backend.errors import BackendUnavailableError
+from mlia.core.context import ExecutionContext
 from mlia.core.errors import ConfigurationError
 from mlia.target.ethos_u.config import EthosUConfiguration
 from mlia.target.ethos_u.performance import (
@@ -16,6 +17,7 @@ from mlia.target.ethos_u.performance import (
     EthosUPerformanceEstimator,
     MemoryUsage,
     NPUCycles,
+    NpuPerformanceUnavailableError,
     PerformanceMetrics,
     VelaPerformanceEstimator,
     merge_performance_outputs,
@@ -197,6 +199,12 @@ def test_corstone_performance_estimator_estimate_uses_compiler_and_backend(
     backend_name = "corstone-300"
 
     optimized_model = tmp_path / "optimized_model.tflite"
+    optimized_model.write_bytes(b"compiled model")
+    monkeypatch.setattr("ethosu.vela.tflite.Model.Model.GetRootAs", MagicMock())
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.performance._cpu_only_tflite_has_fp32",
+        MagicMock(return_value=None),
+    )
     compile_mock = MagicMock(return_value=optimized_model)
     monkeypatch.setattr(
         "mlia.target.ethos_u.performance.vela_comp.compile_model",
@@ -243,6 +251,46 @@ def test_corstone_performance_estimator_prepares_pte_without_conversion(
     model_path.write_text("mock executorch model")
 
     assert estimator._prepare_executorch_model(model_path) == model_path
+
+
+@pytest.mark.parametrize(
+    "model_fixture, expected_cpu_only_has_fp32",
+    [
+        ("test_tflite_model_fp32", True),
+        ("test_tflite_model_int64", False),
+        ("test_tflite_model_npu", None),
+    ],
+)
+def test_corstone_tflite_model_compatibility(
+    sample_context: ExecutionContext,
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    model_fixture: str,
+    expected_cpu_only_has_fp32: bool | None,
+) -> None:
+    """Raise error if no NPU operations, and provide advice if FP32 tensors present."""
+    model_path: Path = request.getfixturevalue(model_fixture)
+
+    target = EthosUConfiguration.load_profile("ethos-u55-128")
+    assert target.compiler_options is not None
+    target.compiler_options.output_dir = tmp_path
+    run_corstone = MagicMock()
+    monkeypatch.setattr(
+        "mlia.target.ethos_u.performance.estimate_performance", run_corstone
+    )
+    estimator = CorstonePerformanceEstimator(sample_context, target, "corstone-300")
+
+    if expected_cpu_only_has_fp32 is None:
+        assert isinstance(estimator.estimate(model_path), NPUCycles)
+        run_corstone.assert_called_once()
+    else:
+        with pytest.raises(
+            NpuPerformanceUnavailableError, match="no operations were mapped"
+        ) as error:
+            estimator.estimate(model_path)
+        assert error.value.has_fp32 is expected_cpu_only_has_fp32
+        run_corstone.assert_not_called()
 
 
 def test_corstone_performance_estimator_converts_pt2_via_transformer(
