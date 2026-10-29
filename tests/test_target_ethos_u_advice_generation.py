@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import pytest
 
-from mlia.cli.helpers import CLIActionResolver
 from mlia.core.advice_generation import Advice
 from mlia.core.common import AdviceCategory, DataItem
 from mlia.core.context import ExecutionContext
@@ -28,6 +27,22 @@ from mlia.target.ethos_u.data_analysis import (
     PerfMetricDiff,
 )
 from mlia.target.ethos_u.pattern_analysis import IneffectiveActivationPattern
+
+
+class FixedActionResolver(ActionResolver):
+    """Test resolver returning distinctive action text."""
+
+    def check_performance(self) -> list[str]:
+        """Return fixed action details for checking performance."""
+        return ["test action: check performance"]
+
+    def check_operator_compatibility(self) -> list[str]:
+        """Return fixed action details for checking op compatibility."""
+        return ["test action: check operator compatibility"]
+
+    def operator_compatibility_details(self) -> list[str]:
+        """Return fixed action details for operator compatibility help."""
+        return ["test action: operator compatibility details"]
 
 
 def assert_advices_match(actual: list[Advice], expected: list[Advice]) -> None:
@@ -63,12 +78,7 @@ def assert_advices_match(actual: list[Advice], expected: list[Advice]) -> None:
         pytest.param(
             AllOperatorsSupportedOnNPU(),
             {AdviceCategory.COMPATIBILITY},
-            CLIActionResolver(
-                {
-                    "target_profile": "sample_target",
-                    "model": "sample_model.tflite",
-                }
-            ),
+            FixedActionResolver(),
             [
                 Advice(
                     id="0",
@@ -76,14 +86,12 @@ def assert_advices_match(actual: list[Advice], expected: list[Advice]) -> None:
                     severity=AdviceSeverity.INFO,
                     message=(
                         "You don't have any unsupported operators, your "
-                        "model will run completely on NPU. Check the "
-                        "estimated performance by running the following "
-                        "command:  mlia check sample_model.tflite "
-                        "--target-profile sample_target --performance"
+                        "model will run completely on NPU. "
+                        "test action: check performance"
                     ),
                 )
             ],
-            id="all_ops_supported_compat_cli_perf_cmd",
+            id="all_ops_supported_compat_action_resolver",
         ),
         pytest.param(
             HasCPUOnlyOperators(cpu_only_ops=["OP1", "OP2", "OP3"]),
@@ -104,24 +112,6 @@ def assert_advices_match(actual: list[Advice], expected: list[Advice]) -> None:
             id="cpu_only_ops_compat_api",
         ),
         pytest.param(
-            HasCPUOnlyOperators(cpu_only_ops=["OP1", "OP2", "OP3"]),
-            {AdviceCategory.COMPATIBILITY},
-            CLIActionResolver({}),
-            [  # Line 78 context
-                Advice(
-                    id="0",
-                    category=SchemaAdviceCategory.COMPATIBILITY,
-                    severity=AdviceSeverity.WARNING,
-                    message=(
-                        "You have at least 3 operators that is CPU only: "
-                        "OP1,OP2,OP3. Using operators that are supported "
-                        "by the NPU will improve performance."
-                    ),
-                )
-            ],
-            id="cpu_only_ops_compat_cli",
-        ),
-        pytest.param(
             HasUnsupportedOnNPUOperators(npu_unsupported_ratio=0.4),
             {AdviceCategory.COMPATIBILITY},
             APIActionResolver(),
@@ -139,25 +129,6 @@ def assert_advices_match(actual: list[Advice], expected: list[Advice]) -> None:
                 )
             ],
             id="unsupported_ops_compat_api",
-        ),
-        pytest.param(
-            HasUnsupportedOnNPUOperators(npu_unsupported_ratio=0.4),
-            {AdviceCategory.COMPATIBILITY},
-            CLIActionResolver({}),
-            [  # Line 104 context
-                Advice(
-                    id="0",
-                    category=SchemaAdviceCategory.COMPATIBILITY,
-                    severity=AdviceSeverity.WARNING,
-                    message=(
-                        "You have 40% of operators that cannot be placed "
-                        "on the NPU. For better performance, please review "
-                        "the reasons reported in the table, and adjust the "
-                        "model accordingly where possible."
-                    ),
-                )
-            ],
-            id="unsupported_ops_compat_cli",
         ),
         pytest.param(
             IneffectiveActivationPattern(
@@ -235,52 +206,6 @@ def assert_advices_match(actual: list[Advice], expected: list[Advice]) -> None:
                 ),
             ],
             id="opt_results_pruning_api",
-        ),
-        pytest.param(
-            OptimizationResults(
-                [
-                    OptimizationDiff(
-                        opt_type=[OptimizationSettings("pruning", 0.5, None)],
-                        opt_diffs={
-                            "sram": PerfMetricDiff(100, 150),
-                            "dram": PerfMetricDiff(100, 50),
-                            "on_chip_flash": PerfMetricDiff(100, 100),
-                            "off_chip_flash": PerfMetricDiff(100, 100),
-                            "npu_total_cycles": PerfMetricDiff(10, 5),
-                        },
-                    ),
-                ]
-            ),
-            {AdviceCategory.OPTIMIZATION},
-            CLIActionResolver({"model": "sample_model.h5"}),
-            [
-                Advice(
-                    id="0",
-                    category=SchemaAdviceCategory.OPTIMIZATION,
-                    severity=AdviceSeverity.INFO,
-                    message=(
-                        "With the selected optimization (pruning: 0.5) - "
-                        "You have achieved 50.00% performance improvement "
-                        "in DRAM used (KB) - You have achieved 50.00% "
-                        "performance improvement in NPU total cycles - "
-                        "SRAM used (KB) have degraded by 50.00% You can "
-                        "try to push the optimization target higher "
-                        "(e.g. pruning: 0.6) to check if those results "
-                        "can be further improved."
-                    ),
-                ),
-                Advice(  # Line 170 context
-                    id="1",
-                    category=SchemaAdviceCategory.OPTIMIZATION,
-                    severity=AdviceSeverity.INFO,
-                    message=(
-                        "The applied tooling techniques have an impact on "
-                        "accuracy. Additional hyperparameter tuning may be "
-                        "required after any optimization."
-                    ),
-                ),
-            ],
-            id="opt_results_pruning_cli",
         ),
         pytest.param(
             OptimizationResults(
@@ -513,9 +438,7 @@ def test_ethosu_advice_producer(
         ),
         pytest.param(
             {AdviceCategory.PERFORMANCE},
-            CLIActionResolver(
-                {"model": "test_model.h5", "target_profile": "sample_target"}
-            ),
+            FixedActionResolver(),
             [
                 Advice(
                     id="0",
@@ -523,14 +446,12 @@ def test_ethosu_advice_producer(
                     severity=AdviceSeverity.INFO,
                     message=(
                         "You can improve the inference time by using only "
-                        "operators that are supported by the NPU. Try "
-                        "running the following command to verify that: "
-                        "mlia check test_model.h5 --target-profile "
-                        "sample_target"
+                        "operators that are supported by the NPU. "
+                        "test action: check operator compatibility"
                     ),
                 ),
             ],
-            id="static_perf_cli_with_cmd",
+            id="static_perf_with_action_resolver",
         ),
         pytest.param(
             {AdviceCategory.OPTIMIZATION},
@@ -551,7 +472,7 @@ def test_ethosu_advice_producer(
         ),
         pytest.param(
             {AdviceCategory.OPTIMIZATION},
-            CLIActionResolver({"model": "test_model.h5"}),
+            FixedActionResolver(),
             [
                 Advice(
                     id="0",
@@ -560,12 +481,12 @@ def test_ethosu_advice_producer(
                     message=(
                         "For better performance, make sure that all the "
                         "operators of your final TensorFlow Lite model are "
-                        "supported by the NPU. For more details, run: mlia "
-                        "check --help"
+                        "supported by the NPU. "
+                        "test action: operator compatibility details"
                     ),
                 )
             ],
-            id="static_optim_cli",
+            id="static_optim_with_action_resolver",
         ),
     ],
 )
