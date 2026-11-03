@@ -199,3 +199,32 @@ troubleshooting problem before drawing performance conclusions.
 - See the [CLI guide](cli.md) for commands that produce these results.
 - See [troubleshooting](troubleshooting.md) if output is missing,
   incomplete, or surprising.
+
+## Terminal compatibility reasons
+
+Ethos-U supplies Vela support descriptions and constraint details.
+
+Reasons are stored consistently in entity-linked checks:
+
+```json
+{
+  "id": "operator_support_0",
+  "entity_id": "source_operator/example",
+  "status": "fail",
+  "details": {
+    "reasons": [
+      {"description": "Operator is unsupported", "detail": ""}
+    ]
+  }
+}
+```
+
+Each reason has a description and a detail string, which may be empty.
+A rejection without a backend explanation has an empty reasons list; passing
+checks may omit reasons. Reasons are not duplicated in entity attributes.
+Entity `kind` and placement remain in JSON. The terminal entity table keeps
+Name, Kind, ID and Placement, joins checks by `entity_id`, and combines
+multiple reasons with semicolons. Reason appears only when a displayed entity
+has a reason; other rows show `-`. Long reasons wrap to the terminal width,
+and full details remain in JSON. Whole-model
+errors are not assigned to individual operators.
