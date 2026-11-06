@@ -199,6 +199,8 @@ def test_legacy_tflite_failure_returns_complete_result(
     assert canonical_result["kind"] == "compatibility"
     assert canonical_result["status"] == expected_status
     assert canonical_result["checks"][0]["status"] == "fail"
+    assert "entity_id" not in canonical_result["checks"][0]
+    assert canonical_result.get("entities", []) == []
     assert canonical_result["metrics"][0]["availability"] == "unavailable"
     assert canonical_result["advice"]
     assert {item["category"] for item in canonical_result["advice"]} == {

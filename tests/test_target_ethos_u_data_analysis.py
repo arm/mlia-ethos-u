@@ -40,6 +40,7 @@ from mlia.target.ethos_u.data_analysis import (
     EthosULayerLowMacUtil,
     HasCPUOnlyOperators,
     HasUnsupportedOnNPUOperators,
+    VelaOperatorAdvice,
     PerfMetricDiff,
     OptimizationResults,
 )
@@ -73,7 +74,17 @@ def _fact_payload(fact: Fact) -> object:
                     Operator(
                         "CPU operator",
                         "CPU operator type",
-                        NpuSupported(False, [("CPU only operator", "")]),
+                        NpuSupported(
+                            False,
+                            [
+                                ("CPU only operator", ""),
+                                (
+                                    "Operator is not supported by the selected "
+                                    "Vela profile.",
+                                    "CPU operator type uses CPU fallback.",
+                                ),
+                            ],
+                        ),
                         OperatorIdentity.tflite(0, 0),
                     )
                 ]
@@ -84,10 +95,18 @@ def _fact_payload(fact: Fact) -> object:
                     location="source_operator/operator/0",
                     operator_type="CPU operator type",
                     is_supported=False,
-                    reasons=[("CPU only operator", "")],
+                    reasons=[
+                        ("CPU only operator", ""),
+                        (
+                            "Operator is not supported by the selected Vela profile.",
+                            "CPU operator type uses CPU fallback.",
+                        ),
+                    ],
                     npu_placement="cpu",
                 ),
-                HasCPUOnlyOperators(["CPU operator type"]),
+                HasCPUOnlyOperators(
+                    ["CPU operator type"], ["source_operator/operator/0"]
+                ),
                 HasUnsupportedOnNPUOperators(1.0),
             ],
         ],
@@ -171,6 +190,150 @@ def test_ethos_u_data_analyzer(
     assert [_fact_payload(fact) for fact in analyzer.get_analyzed_data()] == [
         _fact_payload(fact) for fact in expected_facts
     ]
+
+
+def test_compatibility_failures_produce_per_operator_advice() -> None:
+    """Each observed failure retains its own entity-linked advice."""
+    operators = Operators(
+        [
+            Operator(
+                name=f"op_{index}",
+                op_type="CONV_2D",
+                run_on_npu=NpuSupported(
+                    False,
+                    [("Feature maps must be quantized.", f"tensor_{index} is Float32")],
+                ),
+                identity=OperatorIdentity.tflite(0, index),
+            )
+            for index in range(2)
+        ]
+    )
+    analyzer = EthosUDataAnalyzer()
+
+    analyzer.analyze_data(operators)
+
+    advice = [
+        fact
+        for fact in analyzer.get_analyzed_data()
+        if isinstance(fact, VelaOperatorAdvice)
+    ]
+    assert advice == [
+        VelaOperatorAdvice(
+            entity_id=f"source_operator/operator/{index}",
+            message=f"Feature maps must be quantized. — tensor_{index} is Float32",
+        )
+        for index in range(2)
+    ]
+
+
+def test_unexplained_rejections_only_use_observed_details_for_advice() -> None:
+    """Placement without a Vela constraint still counts as unsupported."""
+    operators = Operators(
+        [
+            Operator(
+                "cpu_only",
+                "CUSTOM",
+                NpuSupported(False, [("CPU only operator", "")]),
+                OperatorIdentity.tflite(0, 0),
+            ),
+            Operator(
+                "unexplained",
+                "ADD",
+                NpuSupported(False, []),
+                OperatorIdentity.tflite(0, 1),
+            ),
+            Operator(
+                "detail_only",
+                "ADD",
+                NpuSupported(False, [("", "Float32 input tensor")]),
+                OperatorIdentity.tflite(0, 2),
+            ),
+            Operator(
+                "description_only",
+                "ADD",
+                NpuSupported(False, [("Feature maps must be quantized", "")]),
+                OperatorIdentity.tflite(0, 3),
+            ),
+        ]
+    )
+    analyzer = EthosUDataAnalyzer()
+
+    analyzer.analyze_data(operators)
+
+    facts = analyzer.get_analyzed_data()
+    assert [fact for fact in facts if isinstance(fact, VelaOperatorAdvice)] == [
+        VelaOperatorAdvice("source_operator/operator/2", "Float32 input tensor"),
+        VelaOperatorAdvice(
+            "source_operator/operator/3", "Feature maps must be quantized"
+        ),
+    ]
+    assert any(
+        isinstance(fact, HasCPUOnlyOperators)
+        and fact.affected_entity_ids == ["source_operator/operator/0"]
+        for fact in facts
+    )
+    assert any(isinstance(fact, HasUnsupportedOnNPUOperators) for fact in facts)
+
+
+def test_incomplete_analysis_keeps_confirmed_operator_advice() -> None:
+    """CPU placement retains diagnostics without claiming an aggregate verdict."""
+    operators = Operators(
+        [
+            Operator(
+                "rejected",
+                "CONV_2D",
+                NpuSupported(
+                    False,
+                    [
+                        ("CPU only operator", ""),
+                        ("Feature maps must be quantized.", "input is Float32"),
+                    ],
+                ),
+                OperatorIdentity.tflite(0, 0),
+            ),
+            Operator(
+                "catalog_only",
+                "CUSTOM",
+                NpuSupported(
+                    False,
+                    [
+                        ("CPU only operator", ""),
+                        (
+                            "Operator is not supported by the selected Vela profile.",
+                            "CUSTOM uses CPU fallback.",
+                        ),
+                    ],
+                ),
+                OperatorIdentity.tflite(0, 1),
+            ),
+            Operator(
+                "unchecked",
+                "ADD",
+                NpuSupported(None, []),
+                OperatorIdentity.tflite(0, 2),
+            ),
+        ],
+        incomplete_reason="Vela stopped before checking all operators.",
+    )
+    analyzer = EthosUDataAnalyzer()
+
+    analyzer.analyze_data(operators)
+
+    facts = analyzer.get_analyzed_data()
+    assert (
+        len([fact for fact in facts if isinstance(fact, EthosULayerCompatibilityIssue)])
+        == 2
+    )
+    assert [fact for fact in facts if isinstance(fact, VelaOperatorAdvice)] == [
+        VelaOperatorAdvice(
+            "source_operator/operator/0",
+            "Feature maps must be quantized. — input is Float32",
+        )
+    ]
+    assert not any(
+        isinstance(fact, (HasUnsupportedOnNPUOperators, AllOperatorsSupportedOnNPU))
+        for fact in facts
+    )
 
 
 def test_perf_metric_diff_non_zero_original() -> None:

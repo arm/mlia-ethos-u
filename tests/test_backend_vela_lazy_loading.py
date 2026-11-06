@@ -53,8 +53,6 @@ def test_compat_vela_deps_are_retried_after_failed_load(
             Placeholder=object(), SubgraphInput=object(), Const=object()
         ),
         optype_to_builtintype=object(),
-        TFLiteSemantic=object,
-        TFLiteSupportedOperators=object,
         generate_supported_ops=object(),
         VelaCompiler=object,
         layer_metrics=(),

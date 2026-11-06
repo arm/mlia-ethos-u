@@ -78,18 +78,19 @@ Ethos-U profiles, backend options, or major workflows.
 
 Application code must not directly perform runtime network access, launch
 external processes, or mutate the filesystem. Repository-owned actions must go
-through a gateway in the Corstone boundary package. For example:
+through a gateway in `mlia.backend.boundaries`. For example:
 
 ```python
-from mlia.backend.corstone.boundaries.process import run_installer_with_notice
+from mlia.backend.boundaries.process import run_installer_with_notice
 
 run_installer_with_notice(logger, corstone_name, dist_dir, command)
 ```
 
-To add a boundary operation, add an intention-revealing function to the boundary
-package and test its behavior. Reviewers must manually verify, with LLM
-assistance where useful, that boundary operations remain inside the package and
-that user-visible actions announce themselves before crossing the boundary.
+To add a boundary operation, add an intention-revealing function to the shared
+boundary package and test its behavior. Reviewers must manually verify,
+with LLM assistance where useful, that boundary operations remain inside the
+package and that user-visible actions announce themselves before crossing the
+boundary.
 Generic Core process gateways must therefore remain wrapped by an Ethos-U
 gateway that performs the appropriate announcement.
 Derived Vela and Corstone artifacts under the already-announced MLIA output

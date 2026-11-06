@@ -18,7 +18,7 @@ from typing import Any
 import mlia.core.output_schema as schema
 from mlia.backend.errors import BackendExecutionFailed
 from mlia.backend.repo import get_backend_repository
-from mlia.backend.corstone.boundaries.process import (
+from mlia.backend.boundaries.process import (
     process_backend_output_with_notice,
 )
 from mlia.utils.filesystem import get_mlia_resource_dirs, get_mlia_resources, sha256

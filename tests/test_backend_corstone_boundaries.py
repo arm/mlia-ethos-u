@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, call
 import pytest
 from mlia.utils.proc import Command
 
-from mlia.backend.corstone.boundaries.process import (
+from mlia.backend.boundaries.process import (
     process_backend_output_with_notice,
     run_installer_with_notice,
 )
@@ -21,11 +21,11 @@ def test_installer_notice_precedes_execution(
     """The installer gateway announces the action before starting it."""
     events = MagicMock()
     monkeypatch.setattr(
-        "mlia.backend.corstone.boundaries.process.log_boundary_action",
+        "mlia.backend.boundaries.process.log_boundary_action",
         events.notice,
     )
     monkeypatch.setattr(
-        "mlia.backend.corstone.boundaries.process.subprocess.check_call",
+        "mlia.backend.boundaries.process.subprocess.check_call",
         events.execute,
     )
     logger = logging.getLogger("test")
@@ -52,11 +52,11 @@ def test_backend_notice_precedes_execution(
     """The backend gateway announces the action before starting it."""
     events = MagicMock()
     monkeypatch.setattr(
-        "mlia.backend.corstone.boundaries.process.log_boundary_action",
+        "mlia.backend.boundaries.process.log_boundary_action",
         events.notice,
     )
     monkeypatch.setattr(
-        "mlia.backend.corstone.boundaries.process.process_command_output",
+        "mlia.backend.boundaries.process.process_command_output",
         events.execute,
     )
     logger = logging.getLogger("test")

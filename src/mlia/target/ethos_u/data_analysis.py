@@ -6,9 +6,10 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import singledispatchmethod
 
+from mlia.backend.vela._supported_ops_types import Constraint
 from mlia.backend.vela.compat import Operators
 from mlia.core.common import DataItem
 from mlia.core.data_analysis import (
@@ -36,6 +37,7 @@ class HasCPUOnlyOperators(Fact):
     """Model has CPU only operators."""
 
     cpu_only_ops: list[str]
+    affected_entity_ids: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -48,6 +50,43 @@ class HasUnsupportedOnNPUOperators(Fact):
 @dataclass
 class AllOperatorsSupportedOnNPU(Fact):
     """All model's operators supported on NPU."""
+
+
+@register_fact_type(
+    "ethos_u_operator_advice",
+    "layer",
+    "Observed Vela advice for one operator",
+)
+@dataclass
+class VelaOperatorAdvice(Fact):
+    """Advice associated with one operator rejected by Vela."""
+
+    entity_id: str
+    message: str
+
+
+@register_fact_type(
+    "ethos_u_catalog_advice",
+    "layer",
+    "Vela catalog support constraints for rejected operators",
+)
+@dataclass
+class VelaCatalogAdvice(Fact):
+    """Reference constraints from the matching Vela support catalog."""
+
+    message: str
+    affected_entity_ids: list[str]
+
+
+def _format_catalog_constraints(
+    constraints: tuple[Constraint, ...], depth: int = 0
+) -> list[str]:
+    """Format catalog constraints and their nested qualifications."""
+    lines: list[str] = []
+    for constraint in constraints:
+        lines.append(f"{'  ' * depth}- {constraint.text}")
+        lines.extend(_format_catalog_constraints(constraint.children, depth + 1))
+    return lines
 
 
 @register_fact_type(
@@ -223,6 +262,12 @@ class EthosUDataAnalyzer(FactExtractor):
             # Check if activation function pattern occers
             for rule in PATTERN_RULES:
                 if self._sequence_matches(ops, idx, rule.op_seq):
+                    if any(
+                        op.run_on_npu.supported is None
+                        for op in ops[idx : idx + len(rule.op_seq)]
+                    ):
+                        idx += 1
+                        break
                     operator = ops[idx]
                     lut_fact = EthosULayerSuboptimalActivation(
                         operator_name=operator.name,
@@ -249,11 +294,15 @@ class EthosUDataAnalyzer(FactExtractor):
             return
 
         self._analyze_activation_function(operators)
+        operator_advice: list[VelaOperatorAdvice] = []
         for operator in operators.ops:
+            support = operator.run_on_npu.supported
+            if support is None:
+                continue
             # Determine NPU placement
             if operator.cpu_only:
                 npu_placement = "cpu"
-            elif operator.run_on_npu.supported:
+            elif support:
                 npu_placement = "npu"
             else:
                 npu_placement = "unknown"
@@ -263,22 +312,100 @@ class EthosUDataAnalyzer(FactExtractor):
                 operator_name=operator.name,
                 location=operator.identity.entity_id,
                 operator_type=operator.op_type,
-                is_supported=operator.run_on_npu.supported,
+                is_supported=support,
                 reasons=operator.run_on_npu.reasons,
                 npu_placement=npu_placement,
             )
             self.add_fact(layer_fact)
 
+            if support:
+                continue
+
+            messages = dict.fromkeys(
+                " — ".join(
+                    part for part in (description.strip(), detail.strip()) if part
+                )
+                for description, detail in operator.run_on_npu.confirmed_reasons
+                if description.strip() or detail.strip()
+            )
+            for message in messages:
+                operator_advice.append(
+                    VelaOperatorAdvice(operator.identity.entity_id, message)
+                )
+
         # Keep network-level facts for backward compatibility
-        cpu_only = [operator.op_type for operator in operators.ops if operator.cpu_only]
+        cpu_only_operators = [
+            operator for operator in operators.ops if operator.cpu_only
+        ]
+        cpu_only = [operator.op_type for operator in cpu_only_operators]
         if cpu_only:
-            self.add_fact(HasCPUOnlyOperators(cpu_only))
+            self.add_fact(
+                HasCPUOnlyOperators(
+                    cpu_only,
+                    [operator.identity.entity_id for operator in cpu_only_operators],
+                )
+            )
 
-        if operators.npu_unsupported_ratio != 0:
-            self.add_fact(HasUnsupportedOnNPUOperators(operators.npu_unsupported_ratio))
+        unsupported_ratio = operators.npu_unsupported_ratio
+        if unsupported_ratio is not None and unsupported_ratio != 0:
+            self.add_fact(HasUnsupportedOnNPUOperators(unsupported_ratio))
 
-        if operators.npu_unsupported_ratio == 0:
+        if unsupported_ratio == 0:
             self.add_fact(AllOperatorsSupportedOnNPU())
+
+        for advice in operator_advice:
+            self.add_fact(advice)
+
+        self._add_catalog_advice(operators)
+
+    def _add_catalog_advice(self, operators: Operators) -> None:
+        """Add possible catalog constraints for rejected, listed operators."""
+        profile = operators.support_profile
+        version = operators.support_catalog_version
+        if profile is None or version is None:
+            return
+
+        rejected = [
+            (operator, constraints)
+            for operator in operators.ops
+            if operator.run_on_npu.supported is False
+            if (constraints := operators.catalog_constraints_for(operator.op_type))
+            is not None
+        ]
+        if not rejected:
+            return
+
+        if profile.generic_constraints:
+            constraints_text = "\n".join(
+                _format_catalog_constraints(profile.generic_constraints)
+            )
+            self.add_fact(
+                VelaCatalogAdvice(
+                    f"Vela {version} profile-wide support conditions for rejected "
+                    "operators (possible constraints, not confirmed causes):\n"
+                    f"{constraints_text}",
+                    [operator.identity.entity_id for operator, _ in rejected],
+                )
+            )
+
+        by_type: dict[str, tuple[tuple[Constraint, ...], list[str]]] = {}
+        for operator, constraints in rejected:
+            if not constraints:
+                continue
+            if operator.op_type not in by_type:
+                by_type[operator.op_type] = (constraints, [])
+            by_type[operator.op_type][1].append(operator.identity.entity_id)
+
+        for op_type, (constraints, entity_ids) in by_type.items():
+            constraints_text = "\n".join(_format_catalog_constraints(constraints))
+            self.add_fact(
+                VelaCatalogAdvice(
+                    f"Vela {version} support conditions for {op_type} "
+                    "(possible constraints, not confirmed causes):\n"
+                    f"{constraints_text}",
+                    entity_ids,
+                )
+            )
 
     @analyze_data.register
     def analyze_optimization_results(

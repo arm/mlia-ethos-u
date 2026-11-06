@@ -28,6 +28,8 @@ from mlia.target.ethos_u.data_analysis import (
     HasCPUOnlyOperators,
     HasUnsupportedOnNPUOperators,
     OptimizationResults,
+    VelaCatalogAdvice,
+    VelaOperatorAdvice,
 )
 from mlia.target.ethos_u.performance import NpuPerformanceUnavailableError
 from mlia.target.ethos_u.pattern_analysis import (
@@ -59,7 +61,8 @@ class EthosUAdviceProducer(FactBasedAdviceProducer):
 
         message = (
             f"You have at least {cpu_only_ops_num} "
-            f"operator{'s' if cpu_only_ops_num > 1 else ''} that is CPU "
+            f"operator{'s' if cpu_only_ops_num > 1 else ''} "
+            f"that {'is' if cpu_only_ops_num > 1 else 'are'} CPU "
             f"only: {cpu_only_ops}. "
             "Using operators that are supported by the NPU will "
             "improve performance."
@@ -68,6 +71,29 @@ class EthosUAdviceProducer(FactBasedAdviceProducer):
             message=message,
             category=SchemaAdviceCategory.COMPATIBILITY,
             severity=AdviceSeverity.WARNING,
+            affected_entity_ids=data_item.affected_entity_ids,
+        )
+
+    @produce_advice.register
+    @advice_category(AdviceCategory.COMPATIBILITY)
+    def handle_vela_operator_advice(self, data_item: VelaOperatorAdvice) -> None:
+        """Produce entity-linked advice from one observed Vela diagnostic."""
+        self.add_advice(
+            message=data_item.message,
+            category=SchemaAdviceCategory.COMPATIBILITY,
+            severity=AdviceSeverity.WARNING,
+            affected_entity_ids=[data_item.entity_id],
+        )
+
+    @produce_advice.register
+    @advice_category(AdviceCategory.COMPATIBILITY)
+    def handle_vela_catalog_advice(self, data_item: VelaCatalogAdvice) -> None:
+        """Show catalog reference text separately from observed rejection reasons."""
+        self.add_advice(
+            message=data_item.message,
+            category=SchemaAdviceCategory.COMPATIBILITY,
+            severity=AdviceSeverity.INFO,
+            affected_entity_ids=data_item.affected_entity_ids,
         )
 
     @produce_advice.register

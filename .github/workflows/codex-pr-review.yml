@@ -17,8 +17,8 @@ jobs:
       review_instructions: |
         Apply these repository boundary rules when reviewing changed code:
 
-        - Corstone-specific boundary actions must be implemented in
-          `src/mlia/backend/corstone/boundaries/**`, using the Core
+        - Backend-specific boundary actions must be implemented in
+          `src/mlia/backend/boundaries/**`, using the Core
           `mlia.utils.boundaries` gateways where appropriate. Flag new or modified
           code elsewhere that directly performs, or adds an obvious wrapper or
           alias around, filesystem mutation, network access, subprocess

@@ -235,7 +235,7 @@ def test_corstone_installer(
     mock_check_call = MagicMock()
 
     monkeypatch.setattr(
-        "mlia.backend.corstone.boundaries.process.subprocess.check_call",
+        "mlia.backend.boundaries.process.subprocess.check_call",
         mock_check_call,
     )
 

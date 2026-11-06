@@ -18,7 +18,7 @@ from mlia.backend.install import (
     PackagePathChecker,
     StaticPathChecker,
 )
-from mlia.backend.corstone.boundaries.process import run_installer_with_notice
+from mlia.backend.boundaries.process import run_installer_with_notice
 from mlia.utils.download import DownloadConfig
 
 logger = logging.getLogger(__name__)

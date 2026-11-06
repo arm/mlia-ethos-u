@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import os
+import sys
 import tempfile
 from dataclasses import replace
 from pathlib import Path
@@ -241,6 +243,26 @@ def test_compile_model_reports_dependency_failure(
         RuntimeError, match="Model could not be optimized with Vela compiler."
     ):
         compiler.compile_model(test_tflite_model)
+
+
+def test_compile_model_collects_native_diagnostics(
+    test_tflite_model: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Diagnostics written by Regor through the native file descriptor are exposed."""
+    target_config = EthosUConfiguration.load_profile("ethos-u55-256")
+    assert target_config.compiler_options is not None
+    compiler = VelaCompiler(target_config.compiler_options)
+    output_fd = sys.stdout.fileno()
+
+    def fake_compiler(*_: Any) -> None:
+        os.write(output_fd, b"native operator diagnostic\n")
+
+    patch_vela_main(monkeypatch, fake_compiler)
+    lines: list[str] = []
+
+    compiler.compile_model(test_tflite_model, diagnostic_consumer=lines.append)
+
+    assert "native operator diagnostic" in lines
 
 
 @pytest.mark.parametrize(

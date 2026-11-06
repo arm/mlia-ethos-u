@@ -25,6 +25,7 @@ from mlia.target.ethos_u.data_analysis import (
     OptimizationDiff,
     OptimizationResults,
     PerfMetricDiff,
+    VelaOperatorAdvice,
 )
 from mlia.target.ethos_u.pattern_analysis import IneffectiveActivationPattern
 
@@ -53,6 +54,7 @@ def assert_advices_match(actual: list[Advice], expected: list[Advice]) -> None:
         assert actual_adv.category == expected_adv.category
         assert actual_adv.severity == expected_adv.severity
         assert actual_adv.affected_entity_ids == expected_adv.affected_entity_ids
+        assert actual_adv.details == expected_adv.details
 
 
 @pytest.mark.parametrize(
@@ -94,7 +96,10 @@ def assert_advices_match(actual: list[Advice], expected: list[Advice]) -> None:
             id="all_ops_supported_compat_action_resolver",
         ),
         pytest.param(
-            HasCPUOnlyOperators(cpu_only_ops=["OP1", "OP2", "OP3"]),
+            HasCPUOnlyOperators(
+                cpu_only_ops=["OP1", "OP2", "OP3"],
+                affected_entity_ids=["source_operator/operator/0"],
+            ),
             {AdviceCategory.COMPATIBILITY},
             APIActionResolver(),
             [
@@ -107,9 +112,28 @@ def assert_advices_match(actual: list[Advice], expected: list[Advice]) -> None:
                         "OP1,OP2,OP3. Using operators that are supported by "
                         "the NPU will improve performance."
                     ),
+                    affected_entity_ids=["source_operator/operator/0"],
                 )
             ],
             id="cpu_only_ops_compat_api",
+        ),
+        pytest.param(
+            VelaOperatorAdvice(
+                entity_id="source_operator/operator/0",
+                message="Feature maps must be quantized.",
+            ),
+            {AdviceCategory.COMPATIBILITY},
+            APIActionResolver(),
+            [
+                Advice(
+                    id="0",
+                    category=SchemaAdviceCategory.COMPATIBILITY,
+                    severity=AdviceSeverity.WARNING,
+                    message="Feature maps must be quantized.",
+                    affected_entity_ids=["source_operator/operator/0"],
+                )
+            ],
+            id="vela_operator_advice_compat_api",
         ),
         pytest.param(
             HasUnsupportedOnNPUOperators(npu_unsupported_ratio=0.4),

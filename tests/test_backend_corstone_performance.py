@@ -465,7 +465,7 @@ def test_get_metrics_parse_failure_preserves_missing_metric(
         MagicMock(return_value=Command(["fvp"])),
     )
     monkeypatch.setattr(
-        "mlia.backend.corstone.boundaries.process.process_command_output",
+        "mlia.backend.boundaries.process.process_command_output",
         MagicMock(),
     )
 

@@ -4,15 +4,18 @@
 
 from __future__ import annotations
 
-import itertools
 import logging
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
 import mlia
 import mlia.core.output_schema as schema
+from mlia.backend.boundaries.process import compile_vela_model_with_notice
 from mlia.backend.errors import BackendUnavailableError
+from mlia.backend.vela._supported_ops_types import Constraint, SupportProfile
+from mlia.backend.vela.supported_ops import load_catalog
 from mlia.target.ethos_u.utils.model_format import is_pytorch_file, is_tosa_file
 from mlia.utils.filesystem import sha256
 from mlia.utils.logging import redirect_output
@@ -28,8 +31,6 @@ class VelaDeps:
     ethosu_vela_version: str
     Op: Any
     optype_to_builtintype: Any
-    TFLiteSemantic: Any
-    TFLiteSupportedOperators: Any
     generate_supported_ops: Any
     VelaCompiler: Any
     layer_metrics: Any
@@ -48,8 +49,6 @@ def _load_vela_deps() -> VelaDeps:
         from ethosu.vela import __version__ as ethosu_vela_version
         from ethosu.vela.operation import Op
         from ethosu.vela.tflite_mapping import optype_to_builtintype
-        from ethosu.vela.tflite_model_semantic import TFLiteSemantic
-        from ethosu.vela.tflite_supported_operators import TFLiteSupportedOperators
         from ethosu.vela.vela import generate_supported_ops
 
         from mlia.backend.vela.compiler import VelaCompiler
@@ -62,8 +61,6 @@ def _load_vela_deps() -> VelaDeps:
         ethosu_vela_version=ethosu_vela_version,
         Op=Op,
         optype_to_builtintype=optype_to_builtintype,
-        TFLiteSemantic=TFLiteSemantic,
-        TFLiteSupportedOperators=TFLiteSupportedOperators,
         generate_supported_ops=generate_supported_ops,
         VelaCompiler=VelaCompiler,
         layer_metrics=layer_metrics,
@@ -90,6 +87,259 @@ _TFLITE_LAYERWISE_FILTERED_OP_NAMES = ["Placeholder", "Const"]
 
 _ENTITY_KIND_PERFORMANCE_LAYER = "performance_layer"
 _ENTITY_KIND_COMPILED_OPERATOR = "compiled_operator"
+_ENTITY_KIND_VELA_DIAGNOSTIC = "vela_diagnostic"
+_CPU_ONLY_REASON = ("CPU only operator", "")
+_PROFILE_EXCLUSION_DESCRIPTION = (
+    "Operator is not supported by the selected Vela profile."
+)
+_INCOMPLETE_COMPATIBILITY_REASON = "Vela stopped after an operator-support error; compatibility analysis is incomplete."
+_SRAM_CAPACITY_MESSAGE = "Model is too large and uses too much RAM"
+_SRAM_CAPACITY_WARNING = "Warning: SRAM target for arena memory area exceeded."
+_SRAM_COMPATIBILITY_WARNING = (
+    "Vela reported that the model exceeds the SRAM target; "
+    "operator compatibility checks completed."
+)
+_UNVALIDATED_OPERATOR_REASON = {
+    "description": "Operator support was not determined",
+    "detail": "Vela stopped before validating this operator.",
+}
+
+_DIAGNOSTIC_HEADER = re.compile(
+    r"^Warning \(supported operators\) operator: (?P<op_type>[^,]+), "
+    r"ofm: '(?P<name>.*)'$"
+)
+_TFLITE_SEMANTIC_ERROR = re.compile(
+    r"Error:\s+(?P<op_type>[A-Z][A-Z0-9_]*)\s+'(?P<name>[^']+)'\s+"
+    r"Does not have valid TFLite Semantics\.\s*\n"
+    r"\s*-\s*(?P<constraint>[^\n]+)\n"
+    r"\s*(?P<detail>[^\n]+)\n"
+    r"Failed to parse TFLite file",
+)
+_OPERATOR_SUPPORT_ERROR_MARKERS = (
+    "does not have valid tflite semantics",
+    "not supported",
+    "unsupported operator",
+    "constraint",
+)
+
+
+@dataclass(frozen=True)
+class OperatorDiagnostic:
+    """A structured operator rejection emitted by Regor."""
+
+    op_type: str
+    name: str
+    reason: str
+    constraint: str
+
+
+def _parse_operator_diagnostics(lines: list[str]) -> list[OperatorDiagnostic]:
+    """Parse Regor supported-operator warning blocks."""
+    diagnostics: list[OperatorDiagnostic] = []
+    index = 0
+    while index < len(lines):
+        header = _DIAGNOSTIC_HEADER.match(lines[index].strip())
+        if header is None:
+            index += 1
+            continue
+
+        index += 1
+        reason = ""
+        constraints: list[str] = []
+        while index < len(lines):
+            line = lines[index].strip()
+            if _DIAGNOSTIC_HEADER.match(line):
+                break
+            index += 1
+            if not line:
+                if reason or constraints:
+                    break
+                continue
+            if line.startswith("Reason:"):
+                reason = line.removeprefix("Reason:").strip()
+            elif reason:
+                constraints.append(line)
+
+        diagnostics.append(
+            OperatorDiagnostic(
+                op_type=header.group("op_type").strip(),
+                name=header.group("name"),
+                reason=reason,
+                constraint=" ".join(constraints),
+            )
+        )
+    return diagnostics
+
+
+def _exception_messages(error: BaseException) -> list[str]:
+    """Return messages from an exception and its explicit cause chain."""
+    messages: list[str] = []
+    current: BaseException | None = error
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        messages.append(str(current))
+        current = current.__cause__
+    return messages
+
+
+def _parse_tflite_semantic_errors(messages: list[str]) -> list[OperatorDiagnostic]:
+    """Parse Regor TFLite semantic failures from compiler exception messages."""
+    diagnostics: list[OperatorDiagnostic] = []
+    for message in messages:
+        for match in _TFLITE_SEMANTIC_ERROR.finditer(message):
+            diagnostics.append(
+                OperatorDiagnostic(
+                    op_type=match.group("op_type"),
+                    name=match.group("name"),
+                    reason=match.group("detail").strip().rstrip(","),
+                    constraint=match.group("constraint").strip(),
+                )
+            )
+    return diagnostics
+
+
+def _diagnostic_matches_support_error(
+    diagnostic: OperatorDiagnostic, message: str
+) -> bool:
+    """Return whether an error positively identifies a captured rejection."""
+    normalized_message = " ".join(message.split()).casefold()
+    if not any(
+        marker in normalized_message for marker in _OPERATOR_SUPPORT_ERROR_MARKERS
+    ):
+        return False
+
+    op_type = " ".join(diagnostic.op_type.split()).casefold()
+    if op_type not in normalized_message:
+        return False
+
+    identifying_details = (
+        diagnostic.name,
+        diagnostic.reason,
+        diagnostic.constraint,
+    )
+    return any(
+        normalized and normalized in normalized_message
+        for detail in identifying_details
+        if (normalized := " ".join(detail.split()).casefold())
+    )
+
+
+def _operator_support_failure_diagnostics(
+    error: RuntimeError, lines: list[str]
+) -> list[OperatorDiagnostic]:
+    """Return diagnostics only for positively identified support failures."""
+    messages = _exception_messages(error)
+    semantic_diagnostics = _parse_tflite_semantic_errors(messages)
+    emitted_diagnostics = _parse_operator_diagnostics(lines)
+    if semantic_diagnostics:
+        return list(dict.fromkeys([*emitted_diagnostics, *semantic_diagnostics]))
+
+    if emitted_diagnostics and any(
+        _diagnostic_matches_support_error(diagnostic, message)
+        for diagnostic in emitted_diagnostics
+        for message in messages
+    ):
+        return emitted_diagnostics
+    return []
+
+
+def _operator_key(op_type: str, name: str) -> tuple[str, str]:
+    """Return a spelling-insensitive key for an operator diagnostic."""
+    return (re.sub(r"[^A-Z0-9]", "", op_type.upper()), name)
+
+
+def _profile_for(
+    compiler_options: Any, model_format: str, vela_version: str
+) -> SupportProfile | None:
+    """Resolve installed-Vela support information for a compiler configuration."""
+    accelerator = str(getattr(compiler_options, "accelerator_config", ""))
+    match = re.search(r"ethos[-_]u(55|65|85)", accelerator, re.IGNORECASE)
+    if match is None:
+        return None
+    catalog = load_catalog(vela_version)
+    if catalog is None:
+        return None
+    key = (f"ethos-u{match.group(1)}", model_format)
+    profile = catalog.profiles.get(key)
+    if profile is None:
+        logger.warning(
+            "Vela %s has no parsed support profile for %s %s; using runtime "
+            "diagnostics without catalog-based advice.",
+            vela_version,
+            *key,
+        )
+    return profile
+
+
+def _profile_operator_name(profile: SupportProfile, op_type: str) -> str | None:
+    """Find the report spelling of an operator name."""
+    normalized = _operator_key(op_type, "")[0]
+    return next(
+        (
+            name
+            for name in profile.operators
+            if _operator_key(name, "")[0] == normalized
+        ),
+        None,
+    )
+
+
+def _rejection_info(
+    op_type: str,
+    diagnostic: OperatorDiagnostic | None,
+    profile: SupportProfile | None,
+    rejected: bool = False,
+    compilation_completed: bool = True,
+) -> NpuSupported:
+    """Build placement information from Regor and generated profile data."""
+    cpu_fallback_confirmed = rejected or (
+        compilation_completed and profile is not None and profile.fallback == "cpu"
+    )
+    cpu_fallback_reasons = [_CPU_ONLY_REASON] if cpu_fallback_confirmed else []
+    if diagnostic is not None:
+        description = diagnostic.constraint.strip()
+        detail = diagnostic.reason.strip()
+        reasons = [(description, detail)] if description or detail else []
+        return NpuSupported(False, [*cpu_fallback_reasons, *reasons])
+
+    if profile is None:
+        return NpuSupported(not rejected, cpu_fallback_reasons)
+
+    report_name = _profile_operator_name(profile, op_type)
+    normalized_unsupported = {
+        _operator_key(name, "")[0] for name in profile.unsupported_operators
+    }
+    explicitly_unsupported = _operator_key(op_type, "")[0] in normalized_unsupported
+    absent_from_allowlist = profile.policy == "allowlist" and report_name is None
+    if not (rejected or explicitly_unsupported or absent_from_allowlist):
+        return NpuSupported(True, [])
+
+    if explicitly_unsupported or absent_from_allowlist:
+        if cpu_fallback_confirmed:
+            detail = f"{op_type} uses CPU fallback for this target and model format."
+        elif profile.fallback == "cpu":
+            detail = (
+                f"{op_type} is unsupported for this target and model format; "
+                "CPU fallback was not confirmed."
+            )
+        else:
+            detail = (
+                f"{op_type} uses compilation failure for this target and model format."
+            )
+        return NpuSupported(
+            False,
+            [
+                *cpu_fallback_reasons,
+                (
+                    _PROFILE_EXCLUSION_DESCRIPTION,
+                    detail,
+                ),
+            ],
+        )
+
+    # The report lists possible constraints, but cannot identify which one failed.
+    return NpuSupported(False, cpu_fallback_reasons)
 
 
 def _get_layerwise_csv_pattern(model_name: str) -> str:
@@ -108,8 +358,18 @@ def _get_layerwise_csv_pattern(model_name: str) -> str:
 class NpuSupported:
     """Operator's npu supported attribute."""
 
-    supported: bool
+    supported: bool | None
     reasons: list[tuple[str, str]]
+
+    @property
+    def confirmed_reasons(self) -> list[tuple[str, str]]:
+        """Return Vela diagnostics without placement or catalog-only markers."""
+        return [
+            reason
+            for reason in self.reasons
+            if reason != _CPU_ONLY_REASON
+            and reason[0] != _PROFILE_EXCLUSION_DESCRIPTION
+        ]
 
 
 @dataclass(frozen=True)
@@ -175,6 +435,19 @@ class OperatorIdentity:
             },
         )
 
+    @classmethod
+    def diagnostic(cls, diagnostic_index: int) -> OperatorIdentity:
+        """Create an identity for an unmatched compiler diagnostic."""
+        cls._validate_index(diagnostic_index, "Vela diagnostic index")
+        return cls(
+            entity_id=f"{_ENTITY_KIND_VELA_DIAGNOSTIC}/{diagnostic_index}",
+            entity_kind=_ENTITY_KIND_VELA_DIAGNOSTIC,
+            attributes={
+                "identity_scope": "vela_compiler_diagnostic",
+                "diagnostic_index": diagnostic_index,
+            },
+        )
+
 
 @dataclass
 class Operator:
@@ -188,10 +461,9 @@ class Operator:
     @property
     def cpu_only(self) -> bool:
         """Return true if operator is CPU only."""
-        cpu_only_reasons = [("CPU only operator", "")]
         return (
-            not self.run_on_npu.supported
-            and self.run_on_npu.reasons == cpu_only_reasons
+            self.run_on_npu.supported is False
+            and _CPU_ONLY_REASON in self.run_on_npu.reasons
         )
 
 
@@ -200,10 +472,34 @@ class Operators:
     """Model's operators."""
 
     ops: list[Operator]
+    incomplete_reason: str | None = field(default=None, repr=False, compare=False)
+    compiler_warnings: list[str] = field(
+        default_factory=list, repr=False, compare=False
+    )
+    support_profile: SupportProfile | None = field(
+        default=None, repr=False, compare=False
+    )
+    support_catalog_version: str | None = field(default=None, repr=False, compare=False)
+
+    def catalog_constraints_for(self, op_type: str) -> tuple[Constraint, ...] | None:
+        """Return catalog constraints for a named operator, if it is listed."""
+        if self.support_profile is None:
+            return None
+        name = _profile_operator_name(self.support_profile, op_type)
+        return self.support_profile.operators[name].constraints if name else None
 
     @property
-    def npu_supported_ratio(self) -> float:
+    def is_complete(self) -> bool:
+        """Return whether every operator's compatibility was determined."""
+        return self.incomplete_reason is None and all(
+            op.run_on_npu.supported is not None for op in self.ops
+        )
+
+    @property
+    def npu_supported_ratio(self) -> float | None:
         """Return NPU supported ratio."""
+        if not self.is_complete:
+            return None
         total = self.total_number
         npu_supported = self.npu_supported_number
 
@@ -213,9 +509,10 @@ class Operators:
         return npu_supported / total
 
     @property
-    def npu_unsupported_ratio(self) -> float:
+    def npu_unsupported_ratio(self) -> float | None:
         """Return NPU unsupported ratio."""
-        return 1 - self.npu_supported_ratio
+        supported_ratio = self.npu_supported_ratio
+        return None if supported_ratio is None else 1 - supported_ratio
 
     @property
     def total_number(self) -> int:
@@ -225,26 +522,30 @@ class Operators:
     @property
     def npu_supported_number(self) -> int:
         """Return number of npu supported operators."""
-        return sum(op.run_on_npu.supported for op in self.ops)
+        return sum(op.run_on_npu.supported is True for op in self.ops)
 
     def _accelerator_operator_percentage_metrics(self) -> list[schema.Metric]:
         """Build compatibility operator percentage metrics."""
-        if self.total_number:
+        supported_ratio = self.npu_supported_ratio
+        if self.total_number and supported_ratio is not None:
             return [
                 schema.Metric(
                     name=schema.METRIC_NAME_ACCELERATOR_OPERATOR_PERCENTAGE,
-                    value=self.npu_supported_ratio * 100,
+                    value=supported_ratio * 100,
                     unit=schema.UNIT_PERCENT,
                 )
             ]
 
+        reason = "Operator placement data is not available."
+        if not self.is_complete:
+            reason = self.incomplete_reason or _INCOMPLETE_COMPATIBILITY_REASON
         return [
             schema.Metric(
                 name=schema.METRIC_NAME_ACCELERATOR_OPERATOR_PERCENTAGE,
                 value=None,
                 unit=schema.UNIT_PERCENT,
                 availability=schema.MetricAvailability.UNAVAILABLE,
-                reason="Operator placement data is not available.",
+                reason=reason,
             )
         ]
 
@@ -335,17 +636,20 @@ class Operators:
 
         for operator in self.ops:
             entity_id = operator.identity.entity_id
+            supported = operator.run_on_npu.supported
+            if supported is True:
+                placement = schema.PlacementType.NPU.value
+            elif operator.cpu_only:
+                placement = schema.PlacementType.CPU.value
+            else:
+                placement = schema.PlacementType.UNKNOWN.value
 
             # Create entity for this operator
             entity = schema.Entity(
                 id=entity_id,
                 kind=operator.identity.entity_kind,
                 name=operator.name,
-                placement=(
-                    schema.PlacementType.NPU.value
-                    if operator.run_on_npu.supported
-                    else schema.PlacementType.CPU.value
-                ),
+                placement=placement,
                 attributes={
                     "op_type": operator.op_type,
                     **operator.identity.attributes,
@@ -354,17 +658,21 @@ class Operators:
             entities.append(entity)
 
             # Create check for NPU placement
-            if operator.run_on_npu.supported:
+            if supported is True:
                 status = schema.CheckStatus.PASS
                 details = {}
-            else:
+            elif supported is False:
                 status = schema.CheckStatus.FAIL
                 details = {
                     "reasons": [
                         {"description": desc, "detail": detail}
                         for desc, detail in operator.run_on_npu.reasons
+                        if (desc, detail) != _CPU_ONLY_REASON
                     ]
                 }
+            else:
+                status = schema.CheckStatus.PARTIAL
+                details = {"reasons": [_UNVALIDATED_OPERATOR_REASON.copy()]}
 
             check = schema.Check(
                 id=f"npu_support_{entity_id}",
@@ -375,7 +683,9 @@ class Operators:
             checks.append(check)
 
         # Determine overall result status
-        if all(operator.run_on_npu.supported for operator in self.ops):
+        if not self.is_complete:
+            result_status = schema.ResultStatus.PARTIAL
+        elif all(operator.run_on_npu.supported for operator in self.ops):
             result_status = schema.ResultStatus.OK
         elif any(operator.run_on_npu.supported for operator in self.ops):
             result_status = schema.ResultStatus.PARTIAL
@@ -390,11 +700,17 @@ class Operators:
                 if operator.identity.entity_kind != schema.ENTITY_KIND_SOURCE_OPERATOR
             }
         )
+        warnings = (
+            [self.incomplete_reason or _INCOMPLETE_COMPATIBILITY_REASON]
+            if not self.is_complete
+            else []
+        )
+        warnings.extend(self.compiler_warnings)
         result = schema.Result(
             kind=schema.ResultKind.COMPATIBILITY,
             status=result_status,
             producer=backend.id,
-            warnings=[],
+            warnings=warnings,
             errors=[],
             metrics=self._accelerator_operator_percentage_metrics(),
             checks=checks,
@@ -430,22 +746,67 @@ def _operators_from_graph(
     vela_internal_ops: tuple,
     deps: VelaDeps,
     identity_factory: Callable[[int, int], OperatorIdentity],
+    diagnostics: list[OperatorDiagnostic] | None = None,
+    profile: SupportProfile | None = None,
+    incomplete_reason: str | None = None,
+    compiler_warnings: list[str] | None = None,
 ) -> Operators:
     """Extract checked operators while preserving graph-local coordinates."""
+    pending_diagnostics: dict[tuple[str, str], list[OperatorDiagnostic]] = {}
+    for diagnostic in diagnostics or []:
+        pending_diagnostics.setdefault(
+            _operator_key(diagnostic.op_type, diagnostic.name), []
+        ).append(diagnostic)
+
     operators = []
     for subgraph_index, subgraph in enumerate(graph.subgraphs):
         for op in subgraph.get_all_ops():
             if op.type in vela_internal_ops:
                 continue
+            op_type = deps.optype_to_builtintype(op.type)
+            matches = pending_diagnostics.get(_operator_key(op_type, op.name), [])
+            matched_diagnostic = matches.pop(0) if matches else None
+            support = _rejection_info(
+                op_type,
+                matched_diagnostic,
+                profile,
+                compilation_completed=incomplete_reason is None,
+            )
+            if incomplete_reason is not None and support.supported is True:
+                support = NpuSupported(None, [])
             operators.append(
                 Operator(
                     name=op.name,
-                    op_type=deps.optype_to_builtintype(op.type),
-                    run_on_npu=_run_on_npu(op, deps),
+                    op_type=op_type,
+                    run_on_npu=support,
                     identity=identity_factory(subgraph_index, op.op_index),
                 )
             )
-    return Operators(operators)
+
+    diagnostic_index = 0
+    for unmatched in pending_diagnostics.values():
+        for diagnostic in unmatched:
+            operators.append(
+                Operator(
+                    name=diagnostic.name,
+                    op_type=diagnostic.op_type,
+                    run_on_npu=_rejection_info(
+                        diagnostic.op_type,
+                        diagnostic,
+                        profile,
+                        compilation_completed=incomplete_reason is None,
+                    ),
+                    identity=OperatorIdentity.diagnostic(diagnostic_index),
+                )
+            )
+            diagnostic_index += 1
+    return Operators(
+        operators,
+        incomplete_reason=incomplete_reason,
+        compiler_warnings=compiler_warnings or [],
+        support_profile=profile,
+        support_catalog_version=deps.ethosu_vela_version if profile else None,
+    )
 
 
 def _supported_compiled_model_operators(
@@ -462,7 +823,47 @@ def _supported_compiled_model_operators(
     If the CSV is unavailable, operators read from Vela's generated TFLite
     artifact receive identities explicitly scoped to that compiled artifact.
     """
-    _, compiled_model_path = vela_compiler.compile_model(model_path)
+    diagnostic_lines: list[str] = []
+    try:
+        _, compiled_model_path = compile_vela_model_with_notice(
+            logger,
+            vela_compiler,
+            model_path,
+            compiler_options.output_dir,
+            diagnostic_lines.append,
+        )
+    except RuntimeError as error:
+        diagnostics = _operator_support_failure_diagnostics(error, diagnostic_lines)
+        if not diagnostics:
+            raise
+        profile = _profile_for(compiler_options, "tosa", deps.ethosu_vela_version)
+        return Operators(
+            [
+                Operator(
+                    diagnostic.name,
+                    diagnostic.op_type,
+                    _rejection_info(
+                        diagnostic.op_type,
+                        diagnostic,
+                        profile,
+                        compilation_completed=False,
+                    ),
+                    OperatorIdentity.diagnostic(index),
+                )
+                for index, diagnostic in enumerate(diagnostics)
+            ],
+            incomplete_reason=_INCOMPLETE_COMPATIBILITY_REASON,
+            support_profile=profile,
+            support_catalog_version=deps.ethosu_vela_version if profile else None,
+        )
+
+    diagnostics = _parse_operator_diagnostics(diagnostic_lines)
+    pending_diagnostics: dict[tuple[str, str], list[OperatorDiagnostic]] = {}
+    for diagnostic in diagnostics:
+        pending_diagnostics.setdefault(
+            _operator_key(diagnostic.op_type, diagnostic.name), []
+        ).append(diagnostic)
+    profile = _profile_for(compiler_options, "tosa", deps.ethosu_vela_version)
 
     output_dir = compiler_options.output_dir
     model_name = model_path.stem
@@ -486,6 +887,8 @@ def _supported_compiled_model_operators(
             vela_internal_ops,
             deps,
             OperatorIdentity.compiled_tflite,
+            diagnostics,
+            profile,
         )
 
     csv_path = csv_paths[0]
@@ -493,19 +896,56 @@ def _supported_compiled_model_operators(
         vela_csv_file=csv_path, metrics=deps.layer_metrics
     )
 
-    operators = [
-        Operator(
-            name=layer.name or f"op_{idx}",
-            op_type=layer.tflite_operator,
-            run_on_npu=NpuSupported(True, []),
-            identity=OperatorIdentity.performance_layer(idx),
+    operators = []
+    for idx, layer in enumerate(original_layerwise_info.layerwise_info):
+        if (
+            not layer.tflite_operator
+            or layer.tflite_operator in _TFLITE_LAYERWISE_FILTERED_OP_NAMES
+        ):
+            continue
+        name = layer.name or f"op_{idx}"
+        matches = pending_diagnostics.get(
+            _operator_key(layer.tflite_operator, name), []
         )
-        for idx, layer in enumerate(original_layerwise_info.layerwise_info)
-        if layer.tflite_operator
-        and layer.tflite_operator not in _TFLITE_LAYERWISE_FILTERED_OP_NAMES
-    ]
+        matched_diagnostic = matches.pop(0) if matches else None
+        placement = str(getattr(layer, "placement", "")).upper()
+        support = (
+            NpuSupported(True, [])
+            if placement == "NPU"
+            else _rejection_info(
+                layer.tflite_operator,
+                matched_diagnostic,
+                profile,
+                rejected=placement == "CPU",
+            )
+        )
+        operators.append(
+            Operator(
+                name=name,
+                op_type=layer.tflite_operator,
+                run_on_npu=support,
+                identity=OperatorIdentity.performance_layer(idx),
+            )
+        )
 
-    return Operators(operators)
+    diagnostic_index = 0
+    for unmatched in pending_diagnostics.values():
+        for diagnostic in unmatched:
+            operators.append(
+                Operator(
+                    diagnostic.name,
+                    diagnostic.op_type,
+                    _rejection_info(diagnostic.op_type, diagnostic, profile),
+                    OperatorIdentity.diagnostic(diagnostic_index),
+                )
+            )
+            diagnostic_index += 1
+
+    return Operators(
+        operators,
+        support_profile=profile,
+        support_catalog_version=deps.ethosu_vela_version if profile else None,
+    )
 
 
 def supported_operators(model_path: Path, compiler_options: Any) -> Operators:
@@ -532,68 +972,42 @@ def supported_operators(model_path: Path, compiler_options: Any) -> Operators:
         )
 
     graph, _ = vela_compiler._read_model(model_path)
+    diagnostic_lines: list[str] = []
+    compiler_warnings: list[str] = []
+    try:
+        compile_vela_model_with_notice(
+            logger,
+            vela_compiler,
+            model_path,
+            getattr(compiler_options, "output_dir", Path("output")),
+            diagnostic_lines.append,
+        )
+        diagnostics = _parse_operator_diagnostics(diagnostic_lines)
+        incomplete_reason = None
+    except MemoryError as error:
+        if str(error) != _SRAM_CAPACITY_MESSAGE or not any(
+            _SRAM_CAPACITY_WARNING in line for line in diagnostic_lines
+        ):
+            raise
+        diagnostics = _parse_operator_diagnostics(diagnostic_lines)
+        incomplete_reason = None
+        compiler_warnings.append(_SRAM_COMPATIBILITY_WARNING)
+    except RuntimeError as error:
+        diagnostics = _operator_support_failure_diagnostics(error, diagnostic_lines)
+        if not diagnostics:
+            raise
+        incomplete_reason = _INCOMPLETE_COMPATIBILITY_REASON
 
     return _operators_from_graph(
         graph,
         vela_internal_ops,
         deps,
         OperatorIdentity.tflite,
+        diagnostics,
+        _profile_for(compiler_options, "tflite", deps.ethosu_vela_version),
+        incomplete_reason,
+        compiler_warnings,
     )
-
-
-def _run_on_npu(operator, deps: VelaDeps) -> NpuSupported:
-    """Return information if operator can run on NPU.
-
-    Vela does a number of checks that can help establish whether
-    a particular operator is supported to run on NPU.
-
-    There are two groups of checks:
-      - general TensorFlow Lite constraints
-      - operator specific constraints
-
-    If an operator is not supported on NPU then this function
-    will return the reason of that.
-
-    The reason is split in two parts:
-      - general description of why the operator cannot be placed on NPU
-      - details on the particular operator
-    """
-    vela_internal_ops = (
-        deps.Op.Placeholder,
-        deps.Op.SubgraphInput,
-        deps.Op.Const,
-    )
-    semantic_checker = deps.TFLiteSemantic()
-    semantic_constraints = itertools.chain(
-        semantic_checker.generic_constraints,
-        semantic_checker.specific_constraints[operator.type],
-    )
-
-    for constraint in semantic_constraints:
-        op_valid, op_reason = constraint(operator)
-        if not op_valid:
-            return NpuSupported(False, [(constraint.__doc__, op_reason)])
-
-    if operator.type not in deps.TFLiteSupportedOperators.supported_operators:
-        reasons = (
-            [("CPU only operator", "")]
-            if operator.type not in vela_internal_ops
-            else []
-        )
-
-        return NpuSupported(False, reasons)
-
-    tflite_supported_operators = deps.TFLiteSupportedOperators()
-    operation_constraints = itertools.chain(
-        tflite_supported_operators.generic_constraints,
-        tflite_supported_operators.specific_constraints[operator.type],
-    )
-    for constraint in operation_constraints:
-        op_valid, op_reason = constraint(operator)
-        if not op_valid:
-            return NpuSupported(False, [(constraint.__doc__, op_reason)])
-
-    return NpuSupported(True, [])
 
 
 def generate_supported_operators_report() -> None:

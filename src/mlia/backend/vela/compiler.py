@@ -8,10 +8,11 @@ import csv
 import logging
 import re
 import sys
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, fields
 from io import StringIO
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Callable, Generator, Literal
 
 from mlia.backend.errors import BackendUnavailableError
 from mlia.transformers.error import TransformerNotFoundError
@@ -20,7 +21,7 @@ from mlia.transformers.registry import (
     transform_model,
 )
 from mlia.utils.filesystem import get_vela_config
-from mlia.utils.logging import redirect_output, redirect_raw_output
+from mlia.utils.logging import process_raw_output, redirect_output
 
 from typing import TYPE_CHECKING
 
@@ -28,6 +29,31 @@ if TYPE_CHECKING:
     from ethosu.vela.nn_graph import Graph, NetworkType
 
 logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def _redirect_compiler_output(
+    consumer: Callable[[str], None] | None,
+) -> Generator[None, None, None]:
+    """Log and optionally collect output written through native file descriptors."""
+
+    def handle_line(level: int, line: str) -> None:
+        logger.log(level, line.rstrip())
+        if consumer is not None:
+            consumer(line.rstrip("\n"))
+
+    with ExitStack() as exit_stack:
+        exit_stack.enter_context(
+            process_raw_output(
+                lambda line: handle_line(logging.DEBUG, line), sys.stdout
+            )
+        )
+        exit_stack.enter_context(
+            process_raw_output(
+                lambda line: handle_line(logging.DEBUG, line), sys.stderr
+            )
+        )
+        yield
 
 
 @dataclass(frozen=True)
@@ -395,7 +421,10 @@ class VelaCompiler:
             raise
 
     def compile_model(
-        self, model_path: Path, already_compiled: bool = False
+        self,
+        model_path: Path,
+        already_compiled: bool = False,
+        diagnostic_consumer: Callable[[str], None] | None = None,
     ) -> tuple[VelaSummary, Path]:
         """Compile the model.
 
@@ -415,9 +444,7 @@ class VelaCompiler:
                     f"(original: {model_path})"
                 )
 
-            with redirect_raw_output(
-                logger, stdout_level=logging.DEBUG, stderr_level=logging.DEBUG
-            ):
+            with _redirect_compiler_output(diagnostic_consumer):
                 tmp = sys.stdout
                 sys.stdout = output_message
                 try:
@@ -464,6 +491,9 @@ class VelaCompiler:
                     )
                 finally:
                     sys.stdout = tmp
+                    if diagnostic_consumer is not None:
+                        for line in output_message.getvalue().splitlines():
+                            diagnostic_consumer(line)
                 if (
                     "Warning: SRAM target for arena memory area exceeded."
                     in output_message.getvalue()
