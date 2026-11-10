@@ -197,6 +197,8 @@ uv build
 
 ## Documentation
 
+[Read the documentation on Arm Developer](https://developer.arm.com/dev-docs/mlia-ethos-u/).
+
 Additional package documentation lives in [docs/README.md](docs/README.md).
 
 ## Releases

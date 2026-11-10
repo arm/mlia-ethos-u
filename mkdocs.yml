@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright 2026, Arm Limited and/or its affiliates.
 # SPDX-License-Identifier: Apache-2.0
 
-site_name: MLIA Ethos-U
+site_name: MLIA for Arm Ethos-U
 site_description: Documentation for the MLIA Ethos-U target and backend plugin.
 site_url: https://arm.github.io/mlia-ethos-u/
 repo_url: https://github.com/arm/mlia-ethos-u
@@ -11,8 +11,26 @@ docs_dir: docs/source
 site_dir: .mkdocs/site
 strict: true
 
+exclude_docs: |
+  /landing-page/
+
+hooks:
+  - docs/scripts/landing.py
+
 theme:
   name: material
+  custom_dir: docs/overrides
+  palette:
+    - media: '(prefers-color-scheme: light)'
+      scheme: default
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: '(prefers-color-scheme: dark)'
+      scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
   features:
     - navigation.sections
     - navigation.top
@@ -31,6 +49,7 @@ markdown_extensions:
 
 nav:
   - Home: index.md
+  - Documentation: documentation.md
   - Target Profiles: target_profiles.md
   - Backends: backends.md
   - Outputs and Metrics: outputs_metrics.md

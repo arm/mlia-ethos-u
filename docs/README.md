@@ -46,3 +46,7 @@ integrations provided by `mlia-ethos-u`.
 The main `mlia` repository documents shared CLI behaviour, output structure,
 and plugin discovery. Use this documentation for Ethos-U-specific target,
 backend, metric, and troubleshooting details.
+
+## Published documentation
+
+[Read the documentation on Arm Developer](https://developer.arm.com/dev-docs/mlia-ethos-u/).

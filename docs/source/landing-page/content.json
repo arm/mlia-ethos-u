@@ -1,0 +1,55 @@
+{
+  "title": "Arm Ethos-U",
+  "headline": "Find the fit for Arm Ethos-U.",
+  "lead": "Check model compatibility for Arm Ethos-U, explore Vela estimates, and investigate performance with supported Corstone backends.",
+  "category": "Target plugin",
+  "start": "/cli",
+  "focus": [
+    {
+      "title": "Select an Arm Ethos-U profile",
+      "description": "Match the analysis to your chosen target configuration.",
+      "to": "/target_profiles"
+    },
+    {
+      "title": "Choose Vela or Corstone",
+      "description": "Start with estimates, then investigate platform behaviour.",
+      "to": "/backends"
+    },
+    {
+      "title": "Read the evidence",
+      "description": "Explore metrics and generated backend artifacts.",
+      "to": "/outputs_metrics"
+    }
+  ],
+  "note": "Backend and input support vary by target profile. Check the backend guide before running an analysis.",
+  "learningTitle": "Analyze models for Arm Ethos-U with MLIA",
+  "learningDescription": "Discover target profiles and backends, check model compatibility, and interpret Vela estimates and Corstone performance results.",
+  "learning": "https://learn.arm.com/learning-paths/embedded-and-microcontrollers/analyze-ethos-u-models-with-mlia/",
+  "repository": "https://github.com/arm/mlia-ethos-u",
+  "guides": [
+    {
+      "title": "Outputs and Metrics",
+      "to": "/outputs_metrics"
+    },
+    {
+      "title": "Ethos-U Target Profiles",
+      "to": "/target_profiles"
+    },
+    {
+      "title": "Troubleshooting",
+      "to": "/troubleshooting"
+    },
+    {
+      "title": "Ethos-U Backends",
+      "to": "/backends"
+    },
+    {
+      "title": "CLI Guide",
+      "to": "/cli"
+    },
+    {
+      "title": "Development",
+      "to": "/development"
+    }
+  ]
+}

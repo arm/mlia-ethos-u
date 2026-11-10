@@ -1,7 +1,9 @@
-<!---
-SPDX-FileCopyrightText: Copyright 2026, Arm Limited and/or its affiliates.
-SPDX-License-Identifier: Apache-2.0
---->
+---
+# SPDX-FileCopyrightText: Copyright 2026, Arm Limited and/or its affiliates.
+# SPDX-License-Identifier: Apache-2.0
+sidebar_position: 1
+slug: /documentation
+---
 
 # MLIA Ethos-U
 
@@ -30,3 +32,6 @@ compatibility, and interpret Vela estimates and Corstone performance results.
 The [Ethos-U Python API walkthrough notebook](ethos_u_api_walkthrough.ipynb)
 is available as a download for interactive use. It is not part of the MkDocs
 navigation because the documentation build does not render notebooks.
+
+For shared CLI, installation, and plugin architecture guidance, see the
+[MLIA core documentation](https://developer.arm.com/dev-docs/mlia/).
