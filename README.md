@@ -15,6 +15,8 @@ The package is distributed as `mlia-ethos-u` and contributes:
 - The Corstone backend plugin, which registers target-specific Corstone backends.
 - Bundled Ethos-U target profiles and Vela configuration assets.
 
+[Read the documentation on Arm Developer](https://developer.arm.com/dev-docs/mlia-ethos-u/).
+
 > Start here: Arm Learning Path
 >
 > [Analyze machine learning models for Arm Ethos-U with Arm ML Inference Advisor](https://learn.arm.com/learning-paths/embedded-and-microcontrollers/analyze-ethos-u-models-with-mlia/)
@@ -24,9 +26,9 @@ The package is distributed as `mlia-ethos-u` and contributes:
 ## Table of Contents
 
 - [Overview](#overview)
+- [Installation](#installation)
 - [Supported targets](#supported-targets)
 - [Backends in this package](#backends-in-this-package)
-- [Installation](#installation)
 - [Reporting bugs](#reporting-bugs)
 - [Development setup](#development-setup)
 - [Common commands](#common-commands)
@@ -47,35 +49,6 @@ This is the package to install when you want MLIA to analyse LiteRT /
 TensorFlow Lite `.tflite` models for Ethos-U55, Ethos-U65, or Ethos-U85 targets,
 or when you want to run
 the Corstone-based ExecuTorch AOT path for supported PyTorch inputs.
-
-## Supported targets
-
-Bundled target profiles include:
-
-- `ethos-u55-128`
-- `ethos-u55-256`
-- `ethos-u65-256`
-- `ethos-u65-512`
-- `ethos-u85-128`
-- `ethos-u85-256`
-- `ethos-u85-512`
-- `ethos-u85-1024`
-- `ethos-u85-2048`
-
-These profiles are shipped under `src/mlia/resources/target_profiles/`.
-
-## Backends in this package
-
-### Vela
-
-The Vela backend is used for compiler-oriented analysis, compatibility checks,
-and Ethos-U standardized performance results based on the Vela toolchain.
-
-### Corstone
-
-The Corstone backend supports simulation-oriented performance flows for
-Corstone platforms used in Ethos-U analysis and validation. It is also the
-backend path used for supported ExecuTorch `.pte` workloads.
 
 ## Installation
 
@@ -132,6 +105,35 @@ TFLite Corstone performance path. See the
 The package depends on MLIA and is intended to be used as part of an MLIA
 installation rather than as a standalone CLI. See `pyproject.toml` for the
 current dependency constraint.
+
+## Supported targets
+
+Bundled target profiles include:
+
+- `ethos-u55-128`
+- `ethos-u55-256`
+- `ethos-u65-256`
+- `ethos-u65-512`
+- `ethos-u85-128`
+- `ethos-u85-256`
+- `ethos-u85-512`
+- `ethos-u85-1024`
+- `ethos-u85-2048`
+
+These profiles are shipped under `src/mlia/resources/target_profiles/`.
+
+## Backends in this package
+
+### Vela
+
+The Vela backend is used for compiler-oriented analysis, compatibility checks,
+and Ethos-U standardized performance results based on the Vela toolchain.
+
+### Corstone
+
+The Corstone backend supports simulation-oriented performance flows for
+Corstone platforms used in Ethos-U analysis and validation. It is also the
+backend path used for supported ExecuTorch `.pte` workloads.
 
 ## Reporting bugs
 
@@ -196,8 +198,6 @@ uv build
 - `tests/`: unit, integration, and CLI coverage for targets and backends.
 
 ## Documentation
-
-[Read the documentation on Arm Developer](https://developer.arm.com/dev-docs/mlia-ethos-u/).
 
 Additional package documentation lives in [docs/README.md](docs/README.md).
 
